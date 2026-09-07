@@ -120,8 +120,9 @@ ADR-0005 has the reasoning behind these choices.
 The app is evolving from a single-scorekeeper tool into a multiplayer room
 where every player acts from their own phone. See `docs/adr/` for the design
 decisions (event-sourced rooms, the pure-Python core, the API's single write
-path, the frontend, and account/deployment choices) and `CHANGELOG.md` for
-progress.
+path, the frontend, and account/deployment choices), `CHANGELOG.md` for
+progress, and **`PROGRESS.md`** for a living session-handoff snapshot — read
+that first when picking this project back up.
 
 `core/taidi_core` is the new domain package implementing that design,
 `api/` is a FastAPI backend built on it, and `web/` is the Next.js PWA
