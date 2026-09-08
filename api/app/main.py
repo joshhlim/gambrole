@@ -11,6 +11,7 @@ from .config import settings
 from .routers import auth as auth_router
 from .routers import mahjong as mahjong_router
 from .routers import rooms as rooms_router
+from .routers import stats as stats_router
 
 app = FastAPI(title="Taidi API", version="0.1.0")
 
@@ -25,6 +26,7 @@ app.add_middleware(
 app.include_router(auth_router.router)
 app.include_router(rooms_router.router)
 app.include_router(mahjong_router.router)
+app.include_router(stats_router.router)
 
 
 @app.get("/healthz")
