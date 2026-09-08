@@ -12,13 +12,13 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: taidi
-          POSTGRES_PASSWORD: taidi_dev
-          POSTGRES_DB: taidi
+          POSTGRES_USER: gambrole
+          POSTGRES_PASSWORD: gambrole_dev
+          POSTGRES_DB: gambrole
         ports:
           - 5433:5432
         options: >-
-          --health-cmd "pg_isready -U taidi"
+          --health-cmd "pg_isready -U gambrole"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -50,13 +50,13 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: taidi
-          POSTGRES_PASSWORD: taidi_dev
-          POSTGRES_DB: taidi
+          POSTGRES_USER: gambrole
+          POSTGRES_PASSWORD: gambrole_dev
+          POSTGRES_DB: gambrole
         ports:
           - 5433:5432
         options: >-
-          --health-cmd "pg_isready -U taidi"
+          --health-cmd "pg_isready -U gambrole"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10

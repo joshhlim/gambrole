@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] - 2026-09-08
+
+### Changed
+- Finished the rename from "Taidi Tracker" to **GamBROle** at the project
+  level: the GitHub repo, the local project directory, README/docs
+  branding, the Python distribution package names (`taidi-core` →
+  `gambrole-core`, `taidi-api` → `gambrole-api`, plus `web`'s package.json
+  → `gambrole-web`), and the local dev Postgres naming
+  (`docker-compose.yml`, CI's service container, test fixtures). The
+  `taidi_core` Python package itself keeps its name — it's the Big Two/
+  Taidi game engine specifically, the same way `mahjong_core` is named for
+  Mahjong; GamBROle is the umbrella app containing both. Deployed infra
+  (Render, Vercel, Supabase) and the `TAIDI_*` environment variable names
+  are untouched by this change — those need a separate, manually-
+  coordinated step since they can't be edited from the repo.
+
 ## [0.6.0] - 2026-09-08
 
 **Analytics dashboard is live** — "My Stats" is no longer a placeholder.

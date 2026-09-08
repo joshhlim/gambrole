@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TAIDI_", env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://taidi:taidi_dev@localhost:5433/taidi"
+    database_url: str = "postgresql+asyncpg://gambrole:gambrole_dev@localhost:5433/gambrole"
 
     # "dev": local HS256 tokens minted by POST /auth/dev-login, no external IdP needed.
     # "supabase": verify tokens issued by Supabase Auth instead.

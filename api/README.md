@@ -10,7 +10,7 @@ for the design this implements.
 # from the repo root
 docker compose up -d postgres          # Postgres on localhost:5433, isolated project "taidi"
 python3 -m venv .venv && source .venv/bin/activate   # once; `source` again each new session
-pip install -r requirements-dev.txt    # installs taidi-core and taidi-api editable
+pip install -r requirements-dev.txt    # installs gambrole-core and gambrole-api editable
 
 cd api
 alembic upgrade head                   # create the schema

@@ -1,4 +1,4 @@
-# Taidi Tracker
+# GamBROle
 
 Score keeping & settlements for Big Two (Taidi) nights. Configurable house
 rules, autosaving games, lifetime analytics.

@@ -1,5 +1,5 @@
 [project]
-name = "taidi-core"
+name = "gambrole-core"
 version = "0.1.0"
 description = "Pure Python domain cores for GamBROle's games: scoring engines and multiplayer room state machines (taidi_core, mahjong_core)"
 requires-python = ">=3.12"

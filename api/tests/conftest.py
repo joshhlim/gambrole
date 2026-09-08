@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / "api"))
 # Must happen before any `app.*` import, since Settings() reads the env at
 # construction time (module-level `engine` in app.db is built from it).
 os.environ.setdefault(
-    "TAIDI_DATABASE_URL", "postgresql+asyncpg://taidi:taidi_dev@localhost:5433/taidi_test"
+    "TAIDI_DATABASE_URL", "postgresql+asyncpg://gambrole:gambrole_dev@localhost:5433/gambrole_test"
 )
 
 import asyncpg  # noqa: E402
@@ -25,8 +25,8 @@ from app.db import engine, metadata  # noqa: E402
 from app.main import app  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 
-_ADMIN_DSN = "postgresql://taidi:taidi_dev@localhost:5433/taidi"
-_TEST_DB = "taidi_test"
+_ADMIN_DSN = "postgresql://gambrole:gambrole_dev@localhost:5433/gambrole"
+_TEST_DB = "gambrole_test"
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -117,7 +117,7 @@ again later without touching history.
 - **Event-sourced rooms**: append-only event log, `apply()`/`fold()` are
   pure, `expected_seq` gives optimistic concurrency. Commands
   validate-then-return-events, never mutate directly.
-- **Two parallel core packages**, one `taidi-core` distribution:
+- **Two parallel core packages**, one `gambrole-core` distribution:
   `taidi_core` (Taidi/Big Two) and `mahjong_core` (Mahjong), each with
   their own `EventType`, state shape, `machine.py` — deliberately *not*
   unified into one generic dispatcher (ADR-0006). Genuinely game-agnostic

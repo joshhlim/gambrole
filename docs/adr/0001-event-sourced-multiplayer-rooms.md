@@ -5,7 +5,7 @@
 
 ## Context
 
-Taidi Tracker began as a single-scorekeeper Streamlit app: one person enters
+GamBROle began as a single-scorekeeper Streamlit app called Taidi Tracker: one person enters
 every player's remaining cards each round, and the whole game is saved as a
 JSON snapshot after each submission. The product direction is a **multiplayer
 room** where each player acts from their own phone:
