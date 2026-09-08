@@ -77,12 +77,12 @@ async def _dispatch(
         except IllegalTransition as e:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
 
+        new_state = machine.fold(state, new_events)
         try:
-            await append_events(session, room_id, new_events)
+            await append_events(session, room_id, new_events, final_state=new_state)
         except IntegrityError:
             continue  # someone else's event landed first — rebuild and retry once
 
-        new_state = machine.fold(state, new_events)
         return _as_json(new_state, invite_code)
 
     raise HTTPException(status.HTTP_409_CONFLICT, "Too many concurrent updates — please retry.")

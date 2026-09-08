@@ -135,6 +135,22 @@ export default function HomePage() {
               My Stats
             </button>
 
+            <button
+              onClick={() => router.push("/history")}
+              data-testid="game-history-btn"
+              className="w-full rounded-xl border border-border py-3 text-sm font-semibold text-muted"
+            >
+              Game History
+            </button>
+
+            <button
+              onClick={() => router.push("/debts")}
+              data-testid="debts-btn"
+              className="w-full rounded-xl border border-border py-3 text-sm font-semibold text-muted"
+            >
+              Debts
+            </button>
+
             {supabase && (
               <button
                 onClick={() => router.push("/settings")}

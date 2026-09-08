@@ -26,12 +26,7 @@ from taidi_core.stats import taidi_round_stats
 from .db import room_participants as room_participants_table
 from .db import rooms as rooms_table
 from .events_store import rebuild_mahjong_state_with_invite, rebuild_taidi_state_with_invite
-
-# 1 Mahjong chip = $0.50. Lives here, not in mahjong_core (which is
-# currency-agnostic domain logic) or mahjong_core's stats module (which
-# stays chip-denominated) — this is purely a display-layer conversion. See
-# ADR-0007.
-MAHJONG_CHIP_VALUE_CENTS = 50
+from .money import MAHJONG_CHIP_VALUE_CENTS
 
 
 class SessionResult(BaseModel):
@@ -65,7 +60,7 @@ class StatsResponse(BaseModel):
     mahjong: MahjongPlayerStats | None
 
 
-async def _ended_room_refs(session: AsyncSession, player_id: UUID) -> list[tuple[UUID, str]]:
+async def ended_room_refs(session: AsyncSession, player_id: UUID) -> list[tuple[UUID, str]]:
     """Every (room_id, game_type) for an ENDED room this player has history
     in — as host (rooms.host_id, who never gets a room_participants row —
     see ADR-0007) or as a joiner (room_participants)."""
@@ -104,7 +99,7 @@ def _streak(sessions: list[SessionResult]) -> int:
 
 
 async def build_stats_for(session: AsyncSession, player_id: UUID) -> StatsResponse:
-    room_refs = await _ended_room_refs(session, player_id)
+    room_refs = await ended_room_refs(session, player_id)
 
     taidi_rooms: list[TaidiRoomState] = []
     mahjong_rooms: list[MahjongRoomState] = []

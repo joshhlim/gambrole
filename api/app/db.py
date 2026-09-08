@@ -86,6 +86,33 @@ room_participants = Table(
     Index("ix_room_participants_player_id", "player_id"),
 )
 
+settlements = Table(
+    "settlements",
+    metadata,
+    Column("id", PGUUID(as_uuid=True), primary_key=True),
+    Column("room_id", PGUUID(as_uuid=True), ForeignKey("rooms.room_id"), nullable=False),
+    # Denormalized from rooms.game_type, purely for display/routing — see
+    # rooms.game_type's own comment above.
+    Column("game_type", String(16), nullable=False),
+    Column("from_player", PGUUID(as_uuid=True), nullable=False),
+    Column("to_player", PGUUID(as_uuid=True), nullable=False),
+    # Already-converted real cents at insert time (mahjong chips have been
+    # multiplied by MAHJONG_CHIP_VALUE_CENTS) — this is a ledger entry, not
+    # a recomputed display metric, so it must not reprice itself if that
+    # constant is ever tuned later.
+    Column("amount_cents", Integer, nullable=False),
+    Column("status", String(16), nullable=False, server_default="pending"),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    # minimize_transfers() never emits two settlements for the same
+    # (room, from, to) pair in one call, so this constraint also serves as
+    # the idempotency guard for both the events_store insert-on-game-end
+    # hook and the backfill script re-running.
+    UniqueConstraint("room_id", "from_player", "to_player", name="uq_settlements_room_from_to"),
+    Index("ix_settlements_from_player", "from_player"),
+    Index("ix_settlements_to_player", "to_player"),
+)
+
 engine = create_async_engine(
     settings.database_url,
     echo=False,

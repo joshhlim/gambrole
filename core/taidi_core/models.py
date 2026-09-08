@@ -203,6 +203,16 @@ class Settlement(BaseModel):
     amount_cents: int
 
 
+class SettlementStatus(StrEnum):
+    """Lifecycle of a persisted Settlement (see api/app/db.py's `settlements`
+    table). No REJECTED value: rejecting a marked_paid claim is an action
+    that reverts status to PENDING, not a fourth resting state."""
+
+    PENDING = "pending"
+    MARKED_PAID = "marked_paid"
+    APPROVED = "approved"
+
+
 class TaidiPlayerStats(BaseModel):
     """Round-level stats, layered on top of the room-level `lifetime`
     figures from `player_lifetime_stats`. Only RESOLVED rounds count toward

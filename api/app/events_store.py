@@ -16,6 +16,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from uuid import uuid4
+
 from mahjong_core import machine as mahjong_machine
 from mahjong_core.models import Event as MahjongEvent
 from mahjong_core.models import EventType as MahjongEventType
@@ -28,10 +30,13 @@ from taidi_core import machine as taidi_machine
 from taidi_core.models import Event as TaidiEvent
 from taidi_core.models import EventType as TaidiEventType
 from taidi_core.models import RoomState as TaidiRoomState
+from taidi_core.settlement import minimize_transfers
 
 from .db import events as events_table
 from .db import room_participants as room_participants_table
 from .db import rooms as rooms_table
+from .db import settlements as settlements_table
+from .money import MAHJONG_CHIP_VALUE_CENTS
 
 AnyRoomState = TaidiRoomState | MahjongRoomState
 
@@ -203,11 +208,22 @@ _ROOM_STATUS_BY_EVENT_TYPE = {
 
 
 async def append_events(
-    session: AsyncSession, room_id: UUID, new_events: list[TaidiEvent] | list[MahjongEvent]
+    session: AsyncSession,
+    room_id: UUID,
+    new_events: list[TaidiEvent] | list[MahjongEvent],
+    *,
+    final_state: AnyRoomState | None = None,
 ) -> None:
     """Insert new events, and keep the stats read-model (rooms.status/
-    ended_at, room_participants — see ADR-0007) in sync with them, all in
+    ended_at, room_participants — see ADR-0007) and the settlements read-model
+    (see the settlements table's comment in db.py) in sync with them, all in
     the same transaction as the events insert.
+
+    `final_state` is the room's state already folded with `new_events` (the
+    caller folds before calling this, rather than after, so the just-ended
+    room's final `balances` are available here) — required to compute
+    settlements on a game_ended transition; harmless to omit for any other
+    call, since it's only consulted when new_status == "ended".
 
     Raises IntegrityError (unmapped) on a (room_id, seq) collision — the
     caller maps that to a 409 for the loser of a race.
@@ -261,6 +277,34 @@ async def append_events(
         await session.execute(
             update(rooms_table).where(rooms_table.c.room_id == room_id).values(**values)
         )
+
+        # A disbanded room never had a real final result worth collecting
+        # debts on — only a genuine game_ended transition settles up.
+        if new_status == "ended" and final_state is not None:
+            game_type = "mahjong" if isinstance(final_state, MahjongRoomState) else "taidi"
+            rate = MAHJONG_CHIP_VALUE_CENTS if game_type == "mahjong" else 1
+            raw_settlements = minimize_transfers(final_state.balances)
+            if raw_settlements:
+                await session.execute(
+                    pg_insert(settlements_table)
+                    .values(
+                        [
+                            {
+                                "id": uuid4(),
+                                "room_id": room_id,
+                                "game_type": game_type,
+                                "from_player": s.from_player,
+                                "to_player": s.to_player,
+                                "amount_cents": s.amount_cents * rate,
+                                "status": "pending",
+                                "created_at": e.created_at,
+                                "updated_at": e.created_at,
+                            }
+                            for s in raw_settlements
+                        ]
+                    )
+                    .on_conflict_do_nothing(index_elements=["room_id", "from_player", "to_player"])
+                )
 
     try:
         await session.commit()
