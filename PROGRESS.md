@@ -9,13 +9,24 @@ file is "what's true right now and what to know before touching it."
 session, update the relevant section here before signing off, the same way
 CHANGELOG.md gets a new entry. Don't let it go stale.
 
-## Current state (as of 2026-09-07, v0.5.6)
+## Current state (as of 2026-09-08, v0.6.1)
 
 Real stack is live: Supabase (Postgres + auth) + Render (API) + Vercel
 (web), deployed as **gambrole.vercel.app**, auto-deploying from every push
 to `main`. Two playable games: **Taidi** (Big Two) and **Mahjong**, both
-fully wired lobby → live table → ended-game stats. Local dev servers run
-at `localhost:3100` (web) and `localhost:8000` (API).
+fully wired lobby → live table → ended-game stats, plus an **analytics
+dashboard** (`/stats`, v0.6.0) with a combined overview and per-game
+detail tabs. Local dev servers run at `localhost:3100` (web) and
+`localhost:8000` (API).
+
+**Project renamed 2026-09-08**: GitHub repo is now `joshhlim/gambrole`
+(was `joshhlim/taidi`), local clone is `/Users/joshlim/gambrole` (was
+`/Users/joshlim/taidi`), Python distribution package names are
+`gambrole-core`/`gambrole-api`/`gambrole-web` (the actual importable
+`taidi_core` module keeps its name — it's the Big Two game engine
+specifically, not the product). `TAIDI_*` env var names, Render/Vercel/
+Supabase config, and the legacy Streamlit app were deliberately left
+alone — that's a separate, manually-coordinated step, not done yet.
 
 Legacy: `taidi.py` (Streamlit + SQLite/Turso) is a separate older app,
 still deployed independently, not part of the `core/`/`api`/`web` stack.
@@ -170,5 +181,16 @@ again later without touching history.
 - Email SMTP rate limit needs sorting before a real game night (Supabase's
   default email sending has low limits — noted as a pre-launch blocker,
   not yet actioned as of this writing).
-- No known open bugs. Everything shipped this phase is tested and CI-green
-  through v0.5.6.
+- Pre-existing rooms (created before the 2026-09-08 stats-infra migration)
+  won't show up in `/stats/me` until `api/scripts/backfill_stats_infra.py`
+  runs once against the production database — not yet run; needs the
+  user's go-ahead since it touches live data.
+- The 2026-09-08 rename to GamBROle was deliberately scoped to repo/code/
+  docs only. If the user wants it to go further: `TAIDI_*` env var names
+  would need renaming in `render.yaml` *and* Render's dashboard (in
+  lockstep, to avoid an outage), and the legacy Streamlit app
+  (`taidi.py`/`db.py`/`ui.py`/`game.py`/`taidi.db`) would need renaming
+  plus a matching update to Streamlit Community Cloud's app settings —
+  neither was requested yet.
+- No known open bugs. Everything shipped through v0.6.1 is tested and
+  CI-green.
