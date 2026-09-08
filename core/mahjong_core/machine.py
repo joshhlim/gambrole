@@ -613,6 +613,10 @@ def apply(state: RoomState, event: Event) -> RoomState:
         hand = new.hands[-1]
         hand.closed = True
         hand.winner = UUID(event.payload["winner"])
+        hand.mode = event.payload.get("mode")
+        hand.tai = event.payload.get("tai")
+        hand.zimo_bonus = event.payload.get("zimo_bonus", False)
+        hand.klppdd = event.payload.get("klppdd", False)
         _apply_transfers(new, hand, event.payload["transfers"])
         _open_next_hand(new, hand, event.payload)
 

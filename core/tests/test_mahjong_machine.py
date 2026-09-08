@@ -282,6 +282,43 @@ class TestHu:
         )
         assert state.hands[0].closed
         assert state.hands[0].winner == A
+        assert state.hands[0].mode == "direct"
+        assert state.hands[0].tai == 1
+        assert state.hands[0].zimo_bonus is False
+        assert state.hands[0].klppdd is False
+
+    def test_hu_records_zimo_bonus_and_klppdd_flags(self, now):
+        state = _started_room(now, _tai_rules(zimo_bonus_chips=5, klppdd_chips=10))
+        state = machine.fold(
+            state,
+            machine.declare_hu(
+                state,
+                expected_seq=state.seq,
+                actor=A,
+                mode="zimo",
+                target_seat=None,
+                tai=2,
+                zimo_bonus=True,
+                klppdd=True,
+                now=now,
+            ),
+        )
+        assert state.hands[0].mode == "zimo"
+        assert state.hands[0].tai == 2
+        assert state.hands[0].zimo_bonus is True
+        assert state.hands[0].klppdd is True
+
+    def test_no_win_leaves_hu_fields_unset(self, now):
+        state = _started_room(now)
+        state = machine.fold(
+            state, machine.declare_no_win(state, expected_seq=state.seq, actor=A, now=now)
+        )
+        assert state.hands[0].closed
+        assert state.hands[0].winner is None
+        assert state.hands[0].mode is None
+        assert state.hands[0].tai is None
+        assert state.hands[0].zimo_bonus is False
+        assert state.hands[0].klppdd is False
 
     def test_tai_out_of_range_rejected(self, now):
         state = _started_room(now, MahjongRules(max_tai=5))

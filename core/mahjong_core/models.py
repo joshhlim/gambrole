@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -129,6 +129,12 @@ class HandState(BaseModel):
     had_gang: bool = False
     closed: bool = False
     winner: UUID | None = None
+    # Win-detail fields, folded from a HU_DECLARED event's payload (see
+    # machine.apply) — stay at their defaults for an open or no-win hand.
+    mode: Literal["direct", "zimo", "bao"] | None = None
+    tai: int | None = None
+    zimo_bonus: bool = False
+    klppdd: bool = False
     transfers: list[Transfer] = Field(default_factory=list)
 
 
