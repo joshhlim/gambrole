@@ -201,3 +201,43 @@ class Settlement(BaseModel):
     from_player: UUID
     to_player: UUID
     amount_cents: int
+
+
+class TaidiPlayerStats(BaseModel):
+    """Round-level stats, layered on top of the room-level `lifetime`
+    figures from `player_lifetime_stats`. Only RESOLVED rounds count toward
+    rounds_played/round_wins/profit/double/triple — a round can survive
+    into an ended room's final state without resolving (e.g. a win was
+    claimed but cards were never fully submitted before the host ended the
+    game), and those have no rules_snapshot to compare card counts against.
+    `special_hands_claimed` is not phase-gated: specials settle immediately
+    and independently of round resolution.
+
+    double_rate/triple_rate are fractions of payer_rounds (rounds the
+    player did NOT win — the only rounds GameRules.multiplier ever applies
+    to, since it's keyed off the payer's own remaining card count), not of
+    rounds_played. payer_rounds is exposed alongside them so a caller can
+    show "N of M losing rounds" rather than a bare, easy-to-misread
+    percentage."""
+
+    player_id: UUID
+    display_name: str
+    lifetime: PlayerStats
+
+    rounds_played: int = 0
+    round_wins: int = 0
+    round_win_rate: float = 0.0
+
+    profit_rounds: int = 0
+    profit_rate: float = 0.0
+
+    payer_rounds: int = 0
+    double_rounds: int = 0
+    double_rate: float = 0.0
+    triple_rounds: int = 0
+    triple_rate: float = 0.0
+
+    special_hands_claimed: int = 0
+
+    best_round_cents: int | None = None
+    worst_round_cents: int | None = None

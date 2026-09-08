@@ -24,7 +24,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from taidi_core.models import Member, RoomStatus
+from taidi_core.models import Member, PlayerStats, RoomStatus
 
 
 class TaiPayout(BaseModel):
@@ -207,3 +207,37 @@ class Event(BaseModel):
     actor: UUID | None
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
+
+
+class MahjongPlayerStats(BaseModel):
+    """Hand-level stats, layered on top of the room-level `lifetime` figures
+    from `player_lifetime_stats`. Only closed hands count toward
+    hands_played; an open (in-progress) hand contributes nothing.
+    "Dealer hands" uses the player's `Member.seat` (immutable once a game
+    starts) against each hand's `dealer_seat` — no separate enrichment
+    needed. `profit_by_kind` is chip-denominated, summed straight from
+    existing `Transfer.kind` entries (no $-equivalent here — that
+    conversion is a display-layer concern, not core domain logic)."""
+
+    player_id: UUID
+    display_name: str
+    lifetime: PlayerStats
+
+    hands_played: int = 0
+    hu_count: int = 0
+    hu_rate: float = 0.0
+
+    win_mode_counts: dict[str, int] = Field(default_factory=dict)
+    win_mode_rates: dict[str, float] = Field(default_factory=dict)
+
+    avg_tai_on_wins: float = 0.0
+    tai_distribution: dict[int, int] = Field(default_factory=dict)
+
+    dealer_hands: int = 0
+    dealer_wins: int = 0
+    dealer_win_rate: float = 0.0
+
+    profit_by_kind: dict[str, int] = Field(default_factory=dict)
+
+    best_hand_chips: int | None = None
+    worst_hand_chips: int | None = None
