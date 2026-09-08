@@ -20,7 +20,8 @@ from mahjong_core import machine as mahjong_machine
 from mahjong_core.models import Event as MahjongEvent
 from mahjong_core.models import EventType as MahjongEventType
 from mahjong_core.models import RoomState as MahjongRoomState
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from taidi_core import machine as taidi_machine
@@ -29,6 +30,7 @@ from taidi_core.models import EventType as TaidiEventType
 from taidi_core.models import RoomState as TaidiRoomState
 
 from .db import events as events_table
+from .db import room_participants as room_participants_table
 from .db import rooms as rooms_table
 
 AnyRoomState = TaidiRoomState | MahjongRoomState
@@ -193,11 +195,28 @@ async def rebuild_mahjong_state_with_invite(
     return state, invite_code
 
 
+_ROOM_STATUS_BY_EVENT_TYPE = {
+    "game_started": "in_progress",
+    "game_ended": "ended",
+    "room_disbanded": "disbanded",
+}
+
+
 async def append_events(
     session: AsyncSession, room_id: UUID, new_events: list[TaidiEvent] | list[MahjongEvent]
 ) -> None:
-    """Insert new events. Raises IntegrityError (unmapped) on a (room_id, seq)
-    collision — the caller maps that to a 409 for the loser of a race."""
+    """Insert new events, and keep the stats read-model (rooms.status/
+    ended_at, room_participants — see ADR-0007) in sync with them, all in
+    the same transaction as the events insert.
+
+    Raises IntegrityError (unmapped) on a (room_id, seq) collision — the
+    caller maps that to a 409 for the loser of a race.
+
+    Event-type checks here are plain string comparisons rather than
+    TaidiEventType/MahjongEventType membership checks, since both enums
+    share the exact same string values for these types and new_events can
+    be either — this keeps the hook game-type-agnostic.
+    """
     if not new_events:
         return
     await session.execute(
@@ -215,6 +234,34 @@ async def append_events(
             for e in new_events
         ],
     )
+
+    joins = [
+        {
+            "room_id": room_id,
+            "player_id": UUID(e.payload["player_id"]),
+            "joined_at": e.created_at,
+        }
+        for e in new_events
+        if e.type.value == "player_joined"
+    ]
+    if joins:
+        await session.execute(
+            pg_insert(room_participants_table)
+            .values(joins)
+            .on_conflict_do_nothing(index_elements=["room_id", "player_id"])
+        )
+
+    for e in new_events:
+        new_status = _ROOM_STATUS_BY_EVENT_TYPE.get(e.type.value)
+        if new_status is None:
+            continue
+        values: dict[str, Any] = {"status": new_status}
+        if new_status in ("ended", "disbanded"):
+            values["ended_at"] = e.created_at
+        await session.execute(
+            update(rooms_table).where(rooms_table.c.room_id == room_id).values(**values)
+        )
+
     try:
         await session.commit()
     except IntegrityError:
