@@ -137,11 +137,12 @@ test("poker shows as not-available yet", async ({ page }) => {
   await expect(page.getByTestId("game-tile-poker")).toBeVisible();
 });
 
-test("my stats shows as not-available yet", async ({ page }) => {
+test("my stats shows an empty state for a brand-new player", async ({ page }) => {
   await login(page, `Eve-${Date.now().toString(36)}`);
   await page.getByTestId("my-stats-btn").click();
   await expect(page).toHaveURL(/\/stats/);
-  await expect(page.getByTestId("not-available")).toBeVisible();
+  await expect(page.getByTestId("stats-tab-overview")).toBeVisible();
+  await expect(page.getByTestId("stats-empty")).toBeVisible();
 });
 
 test("a member can leave a lobby, and the host can disband it", async ({ browser }) => {

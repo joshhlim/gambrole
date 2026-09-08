@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-09-08
+
+**Analytics dashboard is live** — "My Stats" is no longer a placeholder.
+
+### Added
+- A main overview: combined total winnings and a cumulative trend chart
+  across both games (Taidi's cents and Mahjong's chips, converted at a
+  fixed 1 chip = $0.50), per-game subtotals, total/per-game session
+  counts, a win/loss streak, favorite game, and last-played date.
+- A Taidi tab: round win rate (rounds where you pressed "I win" / rounds
+  played), profit rate, double rate and triple rate (of your *losing*
+  rounds, since the multiplier only ever applies to a payer's own card
+  count), special hands claimed, and best/worst round.
+- A Mahjong tab: HU rate, a win-method breakdown (direct/zimo/bao), tai
+  distribution and average, dealer win rate, a profit breakdown by action
+  type (YAO/GANG/HU/BAO/bonuses), and best/worst hand.
+- `GET /stats/me` — one combined endpoint computing all of the above in a
+  single pass over every ended room a player has history in, backed by a
+  new read-model (`rooms.status`/`.ended_at`, a `room_participants` index)
+  that makes "which of my rooms are finished" a plain SQL filter instead
+  of replaying every room in the database (ADR-0007).
+- `TaidiPlayerStats`/`MahjongPlayerStats` round/hand-level aggregators in
+  `core/`, layered on top of the existing room-level lifetime stats.
+  Mahjong's `HandState` now also records each hand's win mode/tai/bonus
+  flags, previously discarded after settlement.
+
 ## [0.5.6] - 2026-09-04
 
 ### Changed
