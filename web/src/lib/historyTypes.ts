@@ -12,6 +12,9 @@ export interface HistoryEntry {
   settlements_pending: number;
   settlements_needs_my_approval: number;
   all_settled: boolean;
+  /** Who ended the game, or null when the inactivity backstop did it. */
+  ended_by: string | null;
+  auto_ended: boolean;
 }
 
 export interface HistoryResponse {

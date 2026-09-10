@@ -36,7 +36,14 @@ function GameCard({ game }: { game: HistoryEntry }) {
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm font-semibold text-foreground">{capitalize(game.game_type)}</p>
-          <p className="text-xs text-muted">{formatDate(game.ended_at)}</p>
+          <p className="text-xs text-muted">
+            {formatDate(game.ended_at)}
+            {game.auto_ended
+              ? " · Auto-ended after inactivity"
+              : game.ended_by
+                ? ` · Ended by ${game.ended_by}`
+                : ""}
+          </p>
         </div>
         <p
           className={`text-lg font-bold ${game.net_cents < 0 ? "text-danger" : "text-brand-strong"}`}

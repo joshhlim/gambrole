@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
+import { readFreshState } from "@/lib/freshState";
 import type { GameRules, RoomState } from "@/lib/types";
 
 /** Rules chosen on /new before the room existed — see that page for why
@@ -27,9 +28,16 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
   const [banner, setBanner] = useState<string | null>(null);
   const [cardsInput, setCardsInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const [blockedBy, setBlockedBy] = useState<string | null>(null);
   const joinedRef = useRef(false);
 
-  const { data: state, setData } = usePolling<RoomState>(() => api.getState(roomId), 1500, [roomId, me]);
+  const { data: state, setData } = usePolling<RoomState>(
+    () => api.getState(roomId),
+    1500,
+    [roomId, me],
+    readFreshState<RoomState>(roomId),
+  );
 
   const isMember = !!(state && me in state.members);
 
@@ -48,7 +56,16 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
       api
         .join(roomId)
         .then(setData)
-        .catch((e) => setBanner(e instanceof ApiError ? e.message : "Couldn't join this room."));
+        .catch((e) => {
+          setBanner(e instanceof ApiError ? e.message : "Couldn't join this room.");
+          // Refused because you're already in another room: the API hands
+          // back which one, so offer a way there instead of stranding you
+          // on a lobby you can't enter.
+          const other = (e instanceof ApiError ? e.detail : null) as {
+            active_room_id?: string;
+          } | null;
+          if (other?.active_room_id) setBlockedBy(other.active_room_id);
+        });
     }
   }, [state, isMember, roomId, setData]);
 
@@ -103,11 +120,77 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
   const isHost = state.host_id === me;
   const nameOf = (id: string) => state.members[id]?.display_name ?? "?";
 
+  /**
+   * Going back means leaving — a player shouldn't still hold a seat in a
+   * lobby while browsing the rest of the app (and the one-active-room rule
+   * would otherwise keep them locked out of every other room). A host can't
+   * leave, only disband, so for them back closes the room — confirmed
+   * inline first if anyone else is still in the lobby.
+   *
+   * Once the game is in progress this is a plain navigation: leaving is
+   * forbidden mid-game (there's real money on the table), so the seat and
+   * balance stay put and the player can come back to them.
+   */
+  async function handleBack() {
+    if (state && state.status === "lobby" && isMember) {
+      if (isHost) {
+        if (membersBySeat.length > 1 && !confirmClose) {
+          setConfirmClose(true);
+          return;
+        }
+        if (!(await run((seq) => api.disband(roomId, seq)))) return;
+      } else if (!(await run((seq) => api.leave(roomId, seq)))) {
+        return;
+      }
+    }
+    router.push("/");
+  }
+
   return (
     <main className="flex-1 px-5 py-8 max-w-md mx-auto w-full">
+      <div className="flex items-center gap-3 mb-6">
+        <button
+          onClick={handleBack}
+          disabled={busy}
+          data-testid="back-btn"
+          className="h-11 w-11 rounded-full border border-border flex items-center justify-center text-lg font-bold text-brand disabled:opacity-50"
+        >
+          ←
+        </button>
+        {confirmClose && (
+          <>
+            <span className="text-xs text-muted">Close the room for everyone?</span>
+            <button
+              onClick={handleBack}
+              disabled={busy}
+              data-testid="confirm-close-btn"
+              className="rounded-lg bg-danger px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+            >
+              Close
+            </button>
+            <button
+              onClick={() => setConfirmClose(false)}
+              data-testid="cancel-close-btn"
+              className="rounded-lg border border-border px-3 py-2 text-xs font-semibold text-muted"
+            >
+              Cancel
+            </button>
+          </>
+        )}
+      </div>
+
       {banner && (
         <div className="mb-4 rounded-lg border border-border bg-surface px-4 py-2 text-sm text-muted">
           {banner}
+          {blockedBy && (
+            <button
+              onClick={() => router.push(`/room/${blockedBy}`)}
+              data-testid="go-to-active-room-btn"
+              className="mt-2 w-full rounded-lg bg-brand-strong py-2 text-xs font-semibold text-white"
+            >
+              Go to your game
+            </button>
+          )}
         </div>
       )}
 
@@ -116,6 +199,7 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
           state={state}
           isHost={isHost}
           isMember={isMember}
+          canJoin={!blockedBy}
           membersBySeat={membersBySeat}
           busy={busy}
           onJoin={() => run((_seq) => api.join(roomId)).then((r) => r && setData(r))}
@@ -171,6 +255,7 @@ function Lobby({
   state,
   isHost,
   isMember,
+  canJoin,
   membersBySeat,
   busy,
   onJoin,
@@ -181,6 +266,7 @@ function Lobby({
   state: RoomState;
   isHost: boolean;
   isMember: boolean;
+  canJoin: boolean;
   membersBySeat: RoomState["members"][string][];
   busy: boolean;
   onJoin: () => void;
@@ -188,6 +274,7 @@ function Lobby({
   onLeave: () => void;
   onDisband: () => void;
 }) {
+  const [confirmDisband, setConfirmDisband] = useState(false);
   return (
     <div className="space-y-6">
       <div className="text-center">
@@ -212,14 +299,18 @@ function Lobby({
       </div>
 
       {!isMember ? (
-        <button
-          onClick={onJoin}
-          disabled={busy}
-          data-testid="lobby-join-btn"
-          className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
-        >
-          Join Room
-        </button>
+        // Hidden when you're already in another room — the API would refuse
+        // every tap, so showing it just invites a button that always fails.
+        canJoin ? (
+          <button
+            onClick={onJoin}
+            disabled={busy}
+            data-testid="lobby-join-btn"
+            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            Join Room
+          </button>
+        ) : null
       ) : isHost ? (
         <div className="space-y-3">
           <button
@@ -230,14 +321,34 @@ function Lobby({
           >
             {membersBySeat.length < 2 ? "Waiting for more players…" : "Start Game"}
           </button>
-          <button
-            onClick={onDisband}
-            disabled={busy}
-            data-testid="disband-room-btn"
-            className="w-full rounded-xl border border-border py-2.5 text-xs font-semibold text-muted disabled:opacity-50"
-          >
-            Disband Room
-          </button>
+          {confirmDisband ? (
+            <div className="flex gap-2">
+              <button
+                onClick={onDisband}
+                disabled={busy}
+                data-testid="confirm-disband-btn"
+                className="flex-1 rounded-xl bg-danger py-2.5 text-xs font-semibold text-white disabled:opacity-50"
+              >
+                Close for everyone
+              </button>
+              <button
+                onClick={() => setConfirmDisband(false)}
+                data-testid="cancel-disband-btn"
+                className="flex-1 rounded-xl border border-border py-2.5 text-xs font-semibold text-muted"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmDisband(true)}
+              disabled={busy}
+              data-testid="disband-room-btn"
+              className="w-full rounded-xl border border-border py-2.5 text-xs font-semibold text-muted disabled:opacity-50"
+            >
+              Disband Room
+            </button>
+          )}
         </div>
       ) : (
         <div className="space-y-3">

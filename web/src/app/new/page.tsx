@@ -161,7 +161,14 @@ export default function NewRoomPage() {
       const created = await api.createRoom(gameType);
       const chosenRules = gameType === "mahjong" ? mahjongRules : rules;
       sessionStorage.setItem(`gambrole_rules_${created.room_id}`, JSON.stringify(chosenRules));
-      router.push(`/room/${created.room_id}`);
+      // POST /rooms already returned the full room — hand it to the room
+      // page so it can render without waiting on a fetch that would tell it
+      // exactly what we already know. Stamped so a stale one is ignored.
+      sessionStorage.setItem(
+        `gambrole_state_${created.room_id}`,
+        JSON.stringify({ at: Date.now(), state: created }),
+      );
+      router.push(`/room/${created.room_id}?g=${gameType}`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Couldn't create a room.");
       setBusy(false);

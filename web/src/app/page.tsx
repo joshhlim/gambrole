@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { devLogin, getStoredAuth, signOut, supabase, type CurrentUser } from "@/lib/auth";
+import type { ActiveRoom } from "@/lib/types";
 import SupabaseAuthForm from "@/components/SupabaseAuthForm";
 
 export default function HomePage() {
@@ -17,6 +18,26 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setUser(getStoredAuth()?.user ?? null);
   }, []);
+  // The way back into a live game from a device that never saw its URL —
+  // e.g. picking up on a laptop after the phone died mid-game. Membership
+  // lives on the account, not the device, so the seat is still there.
+  const [activeRoom, setActiveRoom] = useState<ActiveRoom | null>(null);
+  useEffect(() => {
+    // No need to clear on sign-out: the button only renders in the
+    // signed-in branch, and signing back in refetches.
+    if (!user) return;
+    let cancelled = false;
+    api
+      .activeRoom()
+      .then((r) => !cancelled && setActiveRoom(r))
+      .catch(() => {
+        /* a missing rejoin shortcut shouldn't break the home page */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
   const [nameInput, setNameInput] = useState("");
   const [codeInput, setCodeInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -50,8 +71,9 @@ export default function HomePage() {
     setBusy(true);
     setError(null);
     try {
-      const { room_id } = await api.byCode(code);
-      router.push(`/room/${room_id}`); // the room page itself handles joining
+      const { room_id, game_type } = await api.byCode(code);
+      // the room page itself handles joining; ?g= saves it a lookup round trip
+      router.push(`/room/${room_id}?g=${game_type}`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Couldn't find that room.");
       setBusy(false);
@@ -98,6 +120,16 @@ export default function HomePage() {
             <p className="text-center text-sm text-muted">
               Signed in as <span className="font-semibold text-foreground">{user.display_name}</span>
             </p>
+
+            {activeRoom?.room_id && (
+              <button
+                onClick={() => router.push(`/room/${activeRoom.room_id}?g=${activeRoom.game_type}`)}
+                data-testid="rejoin-room-btn"
+                className="w-full rounded-xl bg-brand-strong py-3 text-sm font-semibold text-white"
+              >
+                Rejoin Room · {activeRoom.invite_code}
+              </button>
+            )}
 
             <button
               onClick={() => router.push("/new")}

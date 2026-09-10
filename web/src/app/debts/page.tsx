@@ -46,6 +46,11 @@ function OwingRow({
           </p>
           <p className="text-xs text-muted">
             {capitalize(debt.game_type)} · {formatDate(debt.created_at)}
+            {debt.auto_ended
+              ? " · Auto-ended after inactivity"
+              : debt.ended_by
+                ? ` · Ended by ${debt.ended_by}`
+                : ""}
           </p>
         </div>
         <p className="text-lg font-bold text-danger">{dollars(debt.amount_cents)}</p>
@@ -97,6 +102,11 @@ function OwedRow({
           </p>
           <p className="text-xs text-muted">
             {capitalize(debt.game_type)} · {formatDate(debt.created_at)}
+            {debt.auto_ended
+              ? " · Auto-ended after inactivity"
+              : debt.ended_by
+                ? ` · Ended by ${debt.ended_by}`
+                : ""}
           </p>
         </div>
         <p className="text-lg font-bold text-brand-strong">{dollars(debt.amount_cents)}</p>

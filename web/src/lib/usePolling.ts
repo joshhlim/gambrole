@@ -8,8 +8,17 @@ import { useEffect, useRef, useState } from "react";
  * state, so `setData` lets callers update immediately after their own
  * actions without waiting for the next tick.
  */
-export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number, deps: unknown[] = []) {
-  const [data, setData] = useState<T | null>(null);
+export function usePolling<T>(
+  fetcher: () => Promise<T>,
+  intervalMs: number,
+  deps: unknown[] = [],
+  /** Renders immediately from state the caller already has, instead of
+   * blocking on the first tick — the room page knows the room's state the
+   * moment it was created, and waiting a round trip to re-learn it is the
+   * bulk of what makes opening a new room feel slow. */
+  initial: T | null = null,
+) {
+  const [data, setData] = useState<T | null>(initial);
   const [error, setError] = useState<Error | null>(null);
   const fetcherRef = useRef(fetcher);
   useEffect(() => {

@@ -16,6 +16,10 @@ export interface DebtView {
   status: DebtStatus;
   created_at: string;
   updated_at: string;
+  /** Who ended the game this debt came from, or null when the inactivity
+   * backstop did it (auto_ended). */
+  ended_by: string | null;
+  auto_ended: boolean;
 }
 
 export interface DebtsResponse {

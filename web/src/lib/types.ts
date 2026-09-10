@@ -46,6 +46,16 @@ export interface Member {
   seat: number;
 }
 
+/** GET /rooms/active — the room you're currently in, so a device that has
+ * never seen its URL can still get back to a live game. room_id is null
+ * when you're not in one. */
+export interface ActiveRoom {
+  room_id: string | null;
+  invite_code?: string;
+  game_type?: GameType;
+  status?: RoomStatus;
+}
+
 export interface RoomState {
   room_id: string;
   game_type: GameType;

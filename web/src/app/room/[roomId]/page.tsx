@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { request } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
 import type { GameType } from "@/lib/types";
@@ -18,8 +18,16 @@ import MahjongRoom from "./MahjongRoom";
 export default function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const router = useRouter();
+  const search = useSearchParams();
   const { user, checked } = useStoredUser();
-  const [gameType, setGameType] = useState<GameType | null>(null);
+  // Whoever sent us here (create / join-by-code) already knew the game type,
+  // and it never changes for a room — so when it rides along in ?g= we can
+  // render the right component immediately instead of spending a whole
+  // round trip just to look it up. Shared links without it still fetch.
+  const hinted = search.get("g");
+  const [gameType, setGameType] = useState<GameType | null>(
+    hinted === "taidi" || hinted === "mahjong" ? hinted : null,
+  );
 
   useEffect(() => {
     // Wait for the client-only auth check to actually complete — redirecting
@@ -29,7 +37,7 @@ export default function RoomPage() {
   }, [checked, user, router]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || gameType) return;
     let cancelled = false;
     request<{ game_type: GameType }>(`/rooms/${roomId}/state`)
       .then((s) => {
@@ -44,7 +52,7 @@ export default function RoomPage() {
     return () => {
       cancelled = true;
     };
-  }, [roomId, user]);
+  }, [roomId, user, gameType]);
 
   if (!user || !gameType) {
     return <main className="flex-1 flex items-center justify-center text-muted text-sm">Loading…</main>;

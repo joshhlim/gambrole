@@ -378,7 +378,13 @@ def end_game(
     actor: UUID,
     now: datetime | None = None,
     event_id: UUID | None = None,
+    reason: str | None = None,
 ) -> list[Event]:
+    """`reason` records WHY the game ended, for anything that ends a game
+    without a player asking — currently only the inactivity backstop, which
+    passes "stale". A player-initiated end leaves it unset; `actor` already
+    says who did it. Without this the two are indistinguishable, which
+    matters once ending a game creates real debts."""
     _check_seq(state, expected_seq)
     _require_in_progress(state)
     _require_member(state, actor)
@@ -387,8 +393,11 @@ def end_game(
         raise IllegalTransition(
             "A round is still being collected — void it before ending the game."
         )
+    payload: dict[str, Any] = {"reason": reason} if reason else {}
     return [
-        _mk_event(state, EventType.GAME_ENDED, actor, {}, _now(now), expected_seq + 1, event_id)
+        _mk_event(
+            state, EventType.GAME_ENDED, actor, payload, _now(now), expected_seq + 1, event_id
+        )
     ]
 
 

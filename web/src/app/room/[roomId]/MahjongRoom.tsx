@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { mahjongApi } from "@/lib/mahjongApi";
 import { usePolling } from "@/lib/usePolling";
+import { readFreshState } from "@/lib/freshState";
 import { SEAT_LABELS, type HandState, type MahjongRoomState, type MahjongRules } from "@/lib/mahjongTypes";
 import type { Member } from "@/lib/types";
 
@@ -36,12 +37,15 @@ export default function MahjongRoom({ roomId, me }: { roomId: string; me: string
   const router = useRouter();
   const [banner, setBanner] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const [blockedBy, setBlockedBy] = useState<string | null>(null);
   const joinedRef = useRef(false);
 
   const { data: state, setData } = usePolling<MahjongRoomState>(
     () => mahjongApi.getState(roomId),
     1500,
     [roomId, me],
+    readFreshState<MahjongRoomState>(roomId),
   );
 
   const isMember = !!(state && me in state.members);
@@ -57,7 +61,14 @@ export default function MahjongRoom({ roomId, me }: { roomId: string; me: string
       mahjongApi
         .join(roomId)
         .then(setData)
-        .catch((e) => setBanner(e instanceof ApiError ? e.message : "Couldn't join this room."));
+        .catch((e) => {
+          setBanner(e instanceof ApiError ? e.message : "Couldn't join this room.");
+          // See TaidiRoom: refused because you're already in another room.
+          const other = (e instanceof ApiError ? e.detail : null) as {
+            active_room_id?: string;
+          } | null;
+          if (other?.active_room_id) setBlockedBy(other.active_room_id);
+        });
     }
   }, [state, isMember, roomId, setData]);
 
@@ -104,11 +115,67 @@ export default function MahjongRoom({ roomId, me }: { roomId: string; me: string
   const isHost = state.host_id === me;
   const nameOf = (id: string) => state.members[id]?.display_name ?? "?";
 
+  /** See TaidiRoom's handleBack — identical semantics, mahjongApi instead. */
+  async function handleBack() {
+    if (state && state.status === "lobby" && isMember) {
+      if (isHost) {
+        if (membersBySeat.length > 1 && !confirmClose) {
+          setConfirmClose(true);
+          return;
+        }
+        if (!(await run((seq) => mahjongApi.disband(roomId, seq)))) return;
+      } else if (!(await run((seq) => mahjongApi.leave(roomId, seq)))) {
+        return;
+      }
+    }
+    router.push("/");
+  }
+
   return (
     <main className="flex-1 px-5 py-8 max-w-md mx-auto w-full">
+      <div className="flex items-center gap-3 mb-6">
+        <button
+          onClick={handleBack}
+          disabled={busy}
+          data-testid="back-btn"
+          className="h-11 w-11 rounded-full border border-border flex items-center justify-center text-lg font-bold text-brand disabled:opacity-50"
+        >
+          ←
+        </button>
+        {confirmClose && (
+          <>
+            <span className="text-xs text-muted">Close the room for everyone?</span>
+            <button
+              onClick={handleBack}
+              disabled={busy}
+              data-testid="confirm-close-btn"
+              className="rounded-lg bg-danger px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+            >
+              Close
+            </button>
+            <button
+              onClick={() => setConfirmClose(false)}
+              data-testid="cancel-close-btn"
+              className="rounded-lg border border-border px-3 py-2 text-xs font-semibold text-muted"
+            >
+              Cancel
+            </button>
+          </>
+        )}
+      </div>
+
       {banner && (
         <div className="mb-4 rounded-lg border border-border bg-surface px-4 py-2 text-sm text-muted">
           {banner}
+          {blockedBy && (
+            <button
+              onClick={() => router.push(`/room/${blockedBy}`)}
+              data-testid="go-to-active-room-btn"
+              className="mt-2 w-full rounded-lg bg-brand-strong py-2 text-xs font-semibold text-white"
+            >
+              Go to your game
+            </button>
+          )}
         </div>
       )}
 
@@ -117,6 +184,7 @@ export default function MahjongRoom({ roomId, me }: { roomId: string; me: string
           state={state}
           isHost={isHost}
           isMember={isMember}
+          canJoin={!blockedBy}
           membersBySeat={membersBySeat}
           busy={busy}
           onJoin={() => run((_seq) => mahjongApi.join(roomId)).then((r) => r && setData(r))}
@@ -162,6 +230,7 @@ function Lobby({
   state,
   isHost,
   isMember,
+  canJoin,
   membersBySeat,
   busy,
   onJoin,
@@ -173,6 +242,7 @@ function Lobby({
   state: MahjongRoomState;
   isHost: boolean;
   isMember: boolean;
+  canJoin: boolean;
   membersBySeat: Member[];
   busy: boolean;
   onJoin: () => void;
@@ -181,6 +251,7 @@ function Lobby({
   onDisband: () => void;
   onSwapSeats: (seatMap: Record<string, number>) => void;
 }) {
+  const [confirmDisband, setConfirmDisband] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
   const canRearrange = isHost && membersBySeat.length === 4;
 
@@ -240,14 +311,17 @@ function Lobby({
       </div>
 
       {!isMember ? (
-        <button
-          onClick={onJoin}
-          disabled={busy || membersBySeat.length >= 4}
-          data-testid="lobby-join-btn"
-          className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
-        >
-          Join Room
-        </button>
+        // See TaidiRoom: hidden when the one-room rule would refuse it.
+        canJoin ? (
+          <button
+            onClick={onJoin}
+            disabled={busy || membersBySeat.length >= 4}
+            data-testid="lobby-join-btn"
+            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            Join Room
+          </button>
+        ) : null
       ) : isHost ? (
         <div className="space-y-3">
           <button
@@ -258,14 +332,34 @@ function Lobby({
           >
             {membersBySeat.length !== 4 ? "Waiting for 4 players…" : "Start Game"}
           </button>
-          <button
-            onClick={onDisband}
-            disabled={busy}
-            data-testid="disband-room-btn"
-            className="w-full rounded-xl border border-border py-2.5 text-xs font-semibold text-muted disabled:opacity-50"
-          >
-            Disband Room
-          </button>
+          {confirmDisband ? (
+            <div className="flex gap-2">
+              <button
+                onClick={onDisband}
+                disabled={busy}
+                data-testid="confirm-disband-btn"
+                className="flex-1 rounded-xl bg-danger py-2.5 text-xs font-semibold text-white disabled:opacity-50"
+              >
+                Close for everyone
+              </button>
+              <button
+                onClick={() => setConfirmDisband(false)}
+                data-testid="cancel-disband-btn"
+                className="flex-1 rounded-xl border border-border py-2.5 text-xs font-semibold text-muted"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmDisband(true)}
+              disabled={busy}
+              data-testid="disband-room-btn"
+              className="w-full rounded-xl border border-border py-2.5 text-xs font-semibold text-muted disabled:opacity-50"
+            >
+              Disband Room
+            </button>
+          )}
         </div>
       ) : (
         <div className="space-y-3">

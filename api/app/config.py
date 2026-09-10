@@ -33,5 +33,14 @@ class Settings(BaseSettings):
     # taken by an unrelated project on a shared dev machine.
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3100"]
 
+    # There's no presence/heartbeat tracking in this app (plain REST +
+    # polling) — a room whose host walks away without disbanding/ending it
+    # would otherwise sit open forever with no way for anyone else to close
+    # it. These drive a lazy staleness check (see events_store.rebuild_state_
+    # with_invite): a room untouched longer than the relevant threshold is
+    # closed the next time anyone reads it.
+    lobby_stale_hours: int = 12
+    in_progress_stale_hours: int = 24
+
 
 settings = Settings()

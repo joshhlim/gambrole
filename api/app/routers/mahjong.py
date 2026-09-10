@@ -13,7 +13,7 @@ and already live in routers/rooms.py.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -26,9 +26,11 @@ from taidi_core.errors import IllegalTransition, NotAuthorized, SeqConflict
 from ..auth import CurrentUser, get_current_user
 from ..db import get_session
 from ..events_store import (
+    AlreadyInActiveRoom,
     RoomNotFound,
     WrongGameType,
     append_events,
+    ensure_no_other_active_room,
     rebuild_mahjong_state_with_invite,
 )
 from ..schemas import (
@@ -51,6 +53,13 @@ async def _get_mahjong_state_or_404(session: AsyncSession, room_id: UUID) -> tup
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Room not found.") from e
     except WrongGameType as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+
+
+def _raise_for_already_active(e: AlreadyInActiveRoom) -> NoReturn:
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        {"message": str(e), "active_room_id": str(e.room_id)},
+    ) from e
 
 
 def _as_json(state: RoomState, invite_code: str) -> dict[str, Any]:
@@ -94,6 +103,10 @@ async def join(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
+    try:
+        await ensure_no_other_active_room(session, user.user_id, excluding_room_id=room_id)
+    except AlreadyInActiveRoom as e:
+        _raise_for_already_active(e)
     return await _dispatch(
         session,
         room_id,

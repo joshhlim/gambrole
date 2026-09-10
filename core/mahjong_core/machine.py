@@ -499,13 +499,18 @@ def end_game(
     actor: UUID,
     now: datetime | None = None,
     event_id: UUID | None = None,
+    reason: str | None = None,
 ) -> list[Event]:
+    """See taidi_core.machine.end_game for what `reason` is for."""
     _check_seq(state, expected_seq)
     if actor != state.host_id:
         raise NotAuthorized("Only the host can end the game.")
     _require_in_progress(state)
+    payload: dict[str, Any] = {"reason": reason} if reason else {}
     return [
-        _mk_event(state, EventType.GAME_ENDED, actor, {}, _now(now), expected_seq + 1, event_id)
+        _mk_event(
+            state, EventType.GAME_ENDED, actor, payload, _now(now), expected_seq + 1, event_id
+        )
     ]
 
 

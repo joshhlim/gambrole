@@ -1,7 +1,7 @@
 "use client";
 
 import { getStoredAuth } from "./auth";
-import type { GameRules, GameType, RoomState } from "./types";
+import type { ActiveRoom, GameRules, GameType, RoomState } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -58,7 +58,9 @@ export const post = <T>(path: string, body?: unknown) =>
 
 export const api = {
   createRoom: (gameType: GameType = "taidi") => post<RoomState>("/rooms", { game_type: gameType }),
-  byCode: (code: string) => request<{ room_id: string }>(`/rooms/by-code/${code}`),
+  byCode: (code: string) =>
+    request<{ room_id: string; game_type: GameType }>(`/rooms/by-code/${code}`),
+  activeRoom: () => request<ActiveRoom>("/rooms/active"),
   getState: (roomId: string) => request<RoomState>(`/rooms/${roomId}/state`),
   join: (roomId: string) => post<RoomState>(`/rooms/${roomId}/join`),
   leave: (roomId: string, expectedSeq: number) =>

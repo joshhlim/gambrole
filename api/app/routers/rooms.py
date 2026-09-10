@@ -14,7 +14,7 @@ directly to HTTP status codes.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NoReturn
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,11 +27,14 @@ from taidi_core.models import Event, RoomState
 from ..auth import CurrentUser, get_current_user
 from ..db import get_session
 from ..events_store import (
+    AlreadyInActiveRoom,
     AnyRoomState,
     RoomNotFound,
     WrongGameType,
     append_events,
     create_room,
+    ensure_no_other_active_room,
+    find_active_room,
     rebuild_state_with_invite,
     rebuild_taidi_state_with_invite,
     resolve_invite_code,
@@ -46,6 +49,13 @@ from ..schemas import (
 from ..time import utcnow
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
+
+
+def _raise_for_already_active(e: AlreadyInActiveRoom) -> NoReturn:
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        {"message": str(e), "active_room_id": str(e.room_id)},
+    ) from e
 
 
 async def _get_state_with_invite_or_404(
@@ -114,23 +124,51 @@ async def create(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     room_id = uuid4()
-    state, invite_code, game_type = await create_room(
-        session,
-        room_id=room_id,
-        host_id=user.user_id,
-        host_display_name=user.display_name,
-        now=utcnow(),
-        game_type=body.game_type,
-    )
+    try:
+        state, invite_code, game_type = await create_room(
+            session,
+            room_id=room_id,
+            host_id=user.user_id,
+            host_display_name=user.display_name,
+            now=utcnow(),
+            game_type=body.game_type,
+        )
+    except AlreadyInActiveRoom as e:
+        _raise_for_already_active(e)
     return _as_json(state, invite_code, game_type)
+
+
+@router.get("/active")
+async def active(
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The room this player is currently in, if any — the way back into a
+    live game from a device that has never seen its URL (see the one-active-
+    room rule in events_store.find_active_room). `room_id` is null when
+    they're not in one."""
+    room_id = await find_active_room(session, user.user_id)
+    if room_id is None:
+        return {"room_id": None}
+    state, invite_code, game_type = await rebuild_state_with_invite(session, room_id)
+    return {
+        "room_id": str(room_id),
+        "invite_code": invite_code,
+        "game_type": game_type,
+        "status": state.status.value,
+    }
 
 
 @router.get("/by-code/{invite_code}")
 async def by_code(invite_code: str, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
-    room_id = await resolve_invite_code(session, invite_code)
-    if room_id is None:
+    """Also returns game_type so the client can route straight to the right
+    room component instead of spending a second round trip just to find out
+    which one to render — see the room page's `g` query param."""
+    row = await resolve_invite_code(session, invite_code)
+    if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No room with that code.")
-    return {"room_id": str(room_id)}
+    room_id, game_type = row
+    return {"room_id": str(room_id), "game_type": game_type}
 
 
 @router.get("/{room_id}/state")
@@ -149,6 +187,10 @@ async def join(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
+    try:
+        await ensure_no_other_active_room(session, user.user_id, excluding_room_id=room_id)
+    except AlreadyInActiveRoom as e:
+        _raise_for_already_active(e)
     return await _dispatch(
         session,
         room_id,
