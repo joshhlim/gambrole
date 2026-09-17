@@ -34,7 +34,16 @@ from uuid import UUID, uuid4
 from taidi_core.errors import IllegalTransition, NotAuthorized, SeqConflict
 from taidi_core.models import Member, RoomStatus
 
-from .models import Event, EventType, HandState, MahjongRules, RoomState, Transfer, TransferKind
+from .models import (
+    Declaration,
+    Event,
+    EventType,
+    HandState,
+    MahjongRules,
+    RoomState,
+    Transfer,
+    TransferKind,
+)
 from .rules import (
     ENGINE_VERSION,
     gang_amount_angang,
@@ -608,10 +617,28 @@ def apply(state: RoomState, event: Event) -> RoomState:
         new.hands = [HandState(hand_no=1, wind=1, dealer_seat=0)]
 
     elif event.type == EventType.YAO_DECLARED:
+        # `an` comes from the event, not the transfers: a self-drawn yao and
+        # an anyao produce the same shape. See models.Declaration.
+        assert event.actor is not None  # declare_yao always records the declarer
+        new.hands[-1].declarations.append(
+            Declaration(
+                player_id=event.actor,
+                kind="yao",
+                concealed=bool(event.payload.get("an", False)),
+            )
+        )
         _apply_transfers(new, new.hands[-1], event.payload["transfers"])
 
     elif event.type == EventType.GANG_DECLARED:
         new.hands[-1].had_gang = True
+        assert event.actor is not None  # declare_gang always records the declarer
+        new.hands[-1].declarations.append(
+            Declaration(
+                player_id=event.actor,
+                kind="gang",
+                concealed=event.payload.get("target") == "angang",
+            )
+        )
         _apply_transfers(new, new.hands[-1], event.payload["transfers"])
 
     elif event.type == EventType.HU_DECLARED:

@@ -13,7 +13,7 @@ from uuid import UUID
 
 from taidi_core.models import PlayerStats, RoomStatus
 
-from .models import MahjongPlayerStats, RoomState
+from .models import MahjongPlayerStats, MahjongSessionFacts, RoomState, TransferKind
 
 
 def player_lifetime_stats(rooms: list[RoomState]) -> dict[UUID, PlayerStats]:
@@ -115,3 +115,76 @@ def mahjong_hand_stats(rooms: list[RoomState]) -> dict[UUID, MahjongPlayerStats]
         s.avg_tai_on_wins = total_tai / wins_with_tai if wins_with_tai else 0.0
 
     return stats
+
+
+def mahjong_session_facts(room: RoomState, player_id: UUID) -> MahjongSessionFacts:
+    """Reduce one ended room to per-player counters (see MahjongSessionFacts).
+
+    Only closed hands count, matching mahjong_hand_stats. "Shooting" is
+    being the sole payer of a `direct` win — you discarded the tile someone
+    won on — as opposed to losing to a zimo, where everyone pays regardless
+    of what you did.
+    """
+    facts = MahjongSessionFacts()
+    member = room.members.get(player_id)
+    if member is None:
+        return facts
+
+    for hand in room.hands:
+        if not hand.closed:
+            continue
+        facts.hands_played += 1
+
+        if member.seat == hand.dealer_seat:
+            facts.dealer_hands += 1
+            if hand.winner == player_id:
+                facts.dealer_wins += 1
+
+        for d in hand.declarations:
+            if d.player_id != player_id:
+                continue
+            if d.kind == "yao":
+                if d.concealed:
+                    facts.anyao_count += 1
+                else:
+                    facts.yao_count += 1
+            elif d.concealed:
+                facts.angang_count += 1
+            else:
+                facts.gang_count += 1
+
+        net = 0
+        paid_hu = False
+        for t in hand.transfers:
+            if t.from_player == player_id:
+                net -= t.amount_cents
+                if t.kind in (TransferKind.HU, TransferKind.BAO):
+                    paid_hu = True
+            elif t.to_player == player_id:
+                net += t.amount_cents
+        if net > 0:
+            facts.profit_hands += 1
+        if facts.best_hand_chips is None or net > facts.best_hand_chips:
+            facts.best_hand_chips = net
+        if facts.worst_hand_chips is None or net < facts.worst_hand_chips:
+            facts.worst_hand_chips = net
+
+        if hand.winner == player_id:
+            facts.hands_won += 1
+            if hand.mode == "zimo":
+                facts.zimo_wins += 1
+            elif hand.mode == "direct":
+                facts.direct_wins += 1
+            elif hand.mode == "bao":
+                facts.bao_wins += 1
+            if hand.tai is not None:
+                facts.tai_total += hand.tai
+                facts.tai_wins += 1
+        elif hand.winner is not None and paid_hu:
+            facts.lost_hands += 1
+            # A zimo bills everyone equally, so paying into one says nothing
+            # about your play; a direct win means the winning tile came off
+            # your discard.
+            if hand.mode == "direct":
+                facts.shot_hands += 1
+    return facts

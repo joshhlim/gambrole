@@ -251,3 +251,28 @@ class TaidiPlayerStats(BaseModel):
 
     best_round_cents: int | None = None
     worst_round_cents: int | None = None
+
+
+class TaidiSessionFacts(BaseModel):
+    """One ended Taidi room, reduced to counters for one player.
+
+    Deliberately counters, not rates: the client filters sessions (by date,
+    by opponent, last-N) and then sums these, so every rate is a division it
+    does at the end. Rates computed per session couldn't be re-averaged
+    correctly across an arbitrary filter selection.
+    """
+
+    rounds_played: int = 0
+    rounds_won: int = 0
+    profit_rounds: int = 0
+    # Rounds the player PAID in — the only rounds a multiplier can apply to,
+    # so the denominator for double/triple rate.
+    payer_rounds: int = 0
+    double_rounds: int = 0
+    triple_rounds: int = 0
+    special_hands: int = 0
+    # Rounds won where at least one opponent was doubled or tripled: the
+    # player didn't just win, they caught someone badly.
+    trapping_wins: int = 0
+    best_round_cents: int | None = None
+    worst_round_cents: int | None = None

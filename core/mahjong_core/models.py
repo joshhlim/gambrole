@@ -122,11 +122,31 @@ class Transfer(BaseModel):
     hand_no: int
 
 
+class Declaration(BaseModel):
+    """A YAO or GANG someone declared during a hand, and whether it was the
+    concealed variant (anyao / angang).
+
+    The transfers a declaration produces can't answer this on their own: a
+    self-drawn yao and an angang both bill all three opponents, and they're
+    told apart only by amount, which depends on the rules in force. The
+    declaring event has always recorded it (`an` / `target`), so folding it
+    into state here makes the distinction available to stats — including
+    for games played before this existed, since replay reads the same
+    payloads."""
+
+    model_config = ConfigDict(frozen=True)
+
+    player_id: UUID
+    kind: Literal["yao", "gang"]
+    concealed: bool
+
+
 class HandState(BaseModel):
     hand_no: int
     wind: int
     dealer_seat: int
     had_gang: bool = False
+    declarations: list[Declaration] = Field(default_factory=list)
     closed: bool = False
     winner: UUID | None = None
     # Win-detail fields, folded from a HU_DECLARED event's payload (see
@@ -239,5 +259,36 @@ class MahjongPlayerStats(BaseModel):
 
     profit_by_kind: dict[str, int] = Field(default_factory=dict)
 
+    best_hand_chips: int | None = None
+    worst_hand_chips: int | None = None
+
+
+class MahjongSessionFacts(BaseModel):
+    """One ended Mahjong room, reduced to counters for one player. See
+    taidi_core.models.TaidiSessionFacts for why these are counters."""
+
+    hands_played: int = 0
+    hands_won: int = 0
+    profit_hands: int = 0
+    dealer_hands: int = 0
+    dealer_wins: int = 0
+    # How the player's own wins came about.
+    zimo_wins: int = 0
+    direct_wins: int = 0
+    bao_wins: int = 0
+    # Hands someone else won and the player paid into — the denominator for
+    # shooting rate — and how many of those the player shot (discarded the
+    # winning tile, i.e. was the sole payer of a `direct` win).
+    lost_hands: int = 0
+    shot_hands: int = 0
+    # Declarations the player made, concealed variants counted separately.
+    yao_count: int = 0
+    anyao_count: int = 0
+    gang_count: int = 0
+    angang_count: int = 0
+    # Running totals so average tai survives being summed across a filtered
+    # set of sessions.
+    tai_total: int = 0
+    tai_wins: int = 0
     best_hand_chips: int | None = None
     worst_hand_chips: int | None = None

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from .models import PlayerStats, RoomState, RoomStatus, RoundPhase, TaidiPlayerStats
+from .models import (
+    PlayerStats,
+    RoomState,
+    RoomStatus,
+    RoundPhase,
+    TaidiPlayerStats,
+    TaidiSessionFacts,
+)
 
 
 def player_lifetime_stats(rooms: list[RoomState]) -> dict[UUID, PlayerStats]:
@@ -107,3 +114,54 @@ def taidi_round_stats(rooms: list[RoomState]) -> dict[UUID, TaidiPlayerStats]:
         s.triple_rate = s.triple_rounds / s.payer_rounds if s.payer_rounds else 0.0
 
     return stats
+
+
+def taidi_session_facts(room: RoomState, player_id: UUID) -> TaidiSessionFacts:
+    """Reduce one ended room to per-player counters (see TaidiSessionFacts).
+
+    Same round-filtering rules as taidi_round_stats: only RESOLVED rounds
+    with a rules_snapshot count toward round tallies, while specials are
+    counted regardless since they settle independently of the round.
+    """
+    facts = TaidiSessionFacts()
+    for round_ in room.rounds:
+        facts.special_hands += round_.special_counts.get(player_id, 0)
+
+        if round_.phase != RoundPhase.RESOLVED or round_.rules_snapshot is None:
+            continue
+        facts.rounds_played += 1
+
+        net = 0
+        for t in round_.transfers:
+            if t.from_player == player_id:
+                net -= t.amount_cents
+            elif t.to_player == player_id:
+                net += t.amount_cents
+        if net > 0:
+            facts.profit_rounds += 1
+        if facts.best_round_cents is None or net > facts.best_round_cents:
+            facts.best_round_cents = net
+        if facts.worst_round_cents is None or net < facts.worst_round_cents:
+            facts.worst_round_cents = net
+
+        if round_.winner == player_id:
+            facts.rounds_won += 1
+            # Did anyone get caught badly? The multiplier is keyed off each
+            # payer's own remaining cards, so check every other player's
+            # submitted count against the rules that were in force.
+            if any(
+                round_.rules_snapshot.multiplier(cards) >= 2
+                for pid, cards in round_.cards_submitted.items()
+                if pid != player_id
+            ):
+                facts.trapping_wins += 1
+        else:
+            facts.payer_rounds += 1
+            cards = round_.cards_submitted.get(player_id)
+            if cards is not None:
+                mult = round_.rules_snapshot.multiplier(cards)
+                if mult == 3:
+                    facts.triple_rounds += 1
+                elif mult == 2:
+                    facts.double_rounds += 1
+    return facts

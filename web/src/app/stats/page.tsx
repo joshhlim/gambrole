@@ -1,404 +1,399 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ApiError } from "@/lib/api";
+import { ApiError, request } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
-import { statsApi } from "@/lib/statsApi";
-import type {
-  MahjongPlayerStats,
-  OverviewStats,
-  SessionResult,
-  StatsResponse,
-  TaidiPlayerStats,
-} from "@/lib/statsTypes";
+import type { SessionFact, StatsFactsResponse } from "@/lib/statsFactsTypes";
+import {
+  applyFilters,
+  bestWorstGame,
+  cumulative,
+  filtersActive,
+  NO_FILTERS,
+  opponentTally,
+  rate,
+  totals,
+  type Filters,
+  type Totals,
+} from "@/lib/statsMath";
+import { money } from "@/components/charts/Chart";
+import TrendLine from "@/components/charts/TrendLine";
+import SessionBars from "@/components/charts/SessionBars";
+import OpponentBars from "@/components/charts/OpponentBars";
+import SplitDonut from "@/components/charts/SplitDonut";
+import ResultScatter from "@/components/charts/ResultScatter";
 
 type Tab = "overview" | "taidi" | "mahjong";
 
-function dollars(cents: number): string {
-  const sign = cents < 0 ? "-" : "";
-  return `${sign}$${(Math.abs(cents) / 100).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function pct(rate: number): string {
-  return `${Math.round(rate * 100)}%`;
+function pct(r: number | null): string {
+  return r === null ? "—" : `${Math.round(r * 100)}%`;
 }
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function StatTile({
+function Tile({
   label,
   value,
   sub,
-  valueClassName,
+  tone,
   testId,
 }: {
   label: string;
   value: string;
   sub?: string;
-  valueClassName?: string;
+  tone?: "pos" | "neg";
   testId?: string;
 }) {
+  const toneClass =
+    tone === "pos" ? "text-brand-strong" : tone === "neg" ? "text-danger" : "text-foreground";
   return (
-    <div className="rounded-xl border border-border bg-surface px-4 py-3">
-      <p className="text-xs text-muted mb-1">{label}</p>
-      <p data-testid={testId} className={`text-xl font-bold ${valueClassName ?? "text-foreground"}`}>
+    <div className="rounded-xl border border-border bg-surface px-3 py-2.5">
+      <p className="mb-0.5 text-[10px] uppercase tracking-wider text-muted">{label}</p>
+      <p data-testid={testId} className={`text-lg font-bold ${toneClass}`}>
         {value}
       </p>
-      {sub && <p className="text-xs text-muted mt-0.5">{sub}</p>}
+      {sub && <p className="mt-0.5 text-[10px] text-muted">{sub}</p>}
     </div>
   );
 }
 
-function BarRow({
-  label,
-  value,
-  max,
-  formatValue,
+const DAY_PRESETS: { label: string; days: number | null }[] = [
+  { label: "All time", days: null },
+  { label: "30d", days: 30 },
+  { label: "90d", days: 90 },
+  { label: "1y", days: 365 },
+];
+const COUNT_PRESETS: { label: string; lastN: number | null }[] = [
+  { label: "All", lastN: null },
+  { label: "10", lastN: 10 },
+  { label: "25", lastN: 25 },
+  { label: "50", lastN: 50 },
+];
+
+function FilterBar({
+  filters,
+  setFilters,
+  shown,
+  total,
 }: {
-  label: string;
-  value: number;
-  max: number;
-  formatValue: (v: number) => string;
+  filters: Filters;
+  setFilters: (f: Filters) => void;
+  shown: number;
+  total: number;
 }) {
-  const width = max > 0 ? Math.max(4, (value / max) * 100) : 0;
+  const chip = (on: boolean) =>
+    `rounded-lg border px-2 py-1 text-[11px] font-semibold ${
+      on ? "border-brand-strong bg-[#FFF8E1] text-brand" : "border-border bg-surface text-muted"
+    }`;
   return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between text-xs">
-        <span className="font-medium text-foreground">{label}</span>
-        <span className="font-semibold text-brand-strong">{formatValue(value)}</span>
+    <div className="space-y-2 rounded-xl border border-border bg-surface px-3 py-2.5">
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] uppercase tracking-wider text-muted">Filter</p>
+        <div className="flex items-center gap-2">
+          <span data-testid="filter-count" className="text-[10px] text-muted">
+            {shown} of {total} sessions
+          </span>
+          {filtersActive(filters) && (
+            <button
+              type="button"
+              onClick={() => setFilters(NO_FILTERS)}
+              data-testid="filter-clear"
+              className="text-[10px] font-semibold text-brand-strong"
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
-      <div className="h-3 w-full overflow-hidden rounded-sm bg-border">
-        <div className="h-full rounded-r-sm bg-brand-strong" style={{ width: `${width}%` }} />
+      <div className="flex flex-wrap gap-1.5">
+        {DAY_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            data-testid={`filter-days-${p.days ?? "all"}`}
+            onClick={() => setFilters({ ...filters, days: p.days })}
+            className={chip(filters.days === p.days)}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[10px] text-muted">Last</span>
+        {COUNT_PRESETS.map((p) => (
+          <button
+            key={p.label}
+            type="button"
+            data-testid={`filter-last-${p.lastN ?? "all"}`}
+            onClick={() => setFilters({ ...filters, lastN: p.lastN })}
+            className={chip(filters.lastN === p.lastN)}
+          >
+            {p.label}
+          </button>
+        ))}
       </div>
     </div>
   );
 }
 
-function EmptyState({ text }: { text: string }) {
-  return (
-    <p data-testid="stats-empty" className="text-center text-sm text-muted py-8">
-      {text}
-    </p>
-  );
-}
-
-/** Cumulative net result over time as a hand-rolled line+area chart — one
- * series, so no legend needed; colored by whether the running total ends
- * positive or negative, matching the app's existing profit/loss
- * convention (see MahjongRoom's standing amounts). */
-function TrendChart({ trend }: { trend: SessionResult[] }) {
-  if (trend.length === 0) return null;
-
-  const width = 320;
-  const height = 120;
-  const pad = 14;
-  const values = trend.map((s) => s.cumulative_cents);
-  const rawMin = Math.min(0, ...values);
-  const rawMax = Math.max(0, ...values);
-  // A little headroom on both ends, so the zero reference line never sits
-  // exactly on the chart's own edge (e.g. an all-negative trend would
-  // otherwise put it right at the top, indistinguishable from the frame).
-  const headroom = (rawMax - rawMin || 1) * 0.15;
-  const min = rawMin - headroom;
-  const max = rawMax + headroom;
-  const range = max - min || 1;
-  const innerW = width - pad * 2;
-  const innerH = height - pad * 2;
-  const stepX = trend.length > 1 ? innerW / (trend.length - 1) : 0;
-  const yFor = (v: number) => pad + innerH - ((v - min) / range) * innerH;
-  const points = values.map((v, i) => [pad + i * stepX, yFor(v)] as const);
-  const linePath = points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x},${y}`).join(" ");
-  const zeroY = yFor(0);
-  const [lastX, lastY] = points[points.length - 1];
-  const finalValue = values[values.length - 1];
-  const color = finalValue < 0 ? "var(--danger)" : "var(--brand-strong)";
-  const areaPath = `${linePath} L${lastX},${zeroY} L${points[0][0]},${zeroY} Z`;
+function OverviewTab({
+  sessions,
+  t,
+  filters,
+  setFilters,
+  onSelectRoom,
+}: {
+  sessions: SessionFact[];
+  t: Totals;
+  filters: Filters;
+  setFilters: (f: Filters) => void;
+  onSelectRoom: (roomId: string) => void;
+}) {
+  const opponents = useMemo(() => opponentTally(sessions), [sessions]);
+  const mostPlayedWith = opponents[0];
+  const bw = bestWorstGame(t);
+  const mostPlayedGame =
+    t.byGame.taidi.sessions === t.byGame.mahjong.sessions
+      ? t.sessions === 0
+        ? null
+        : "tied"
+      : t.byGame.taidi.sessions > t.byGame.mahjong.sessions
+        ? "taidi"
+        : "mahjong";
 
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className="w-full h-auto"
-      role="img"
-      aria-label={`Cumulative result trend, ending at ${dollars(finalValue)}`}
-    >
-      <line
-        x1={pad}
-        y1={zeroY}
-        x2={width - pad}
-        y2={zeroY}
-        stroke="var(--border)"
-        strokeWidth={1}
-      />
-      <path d={areaPath} fill={color} fillOpacity={0.1} stroke="none" />
-      <path d={linePath} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={lastX} cy={lastY} r={4} fill={color} stroke="var(--surface)" strokeWidth={2} />
-      <text
-        x={lastX}
-        y={lastY - 10 < 10 ? lastY + 18 : lastY - 10}
-        textAnchor="end"
-        fontSize={11}
-        fontWeight={700}
-        fill={color}
-      >
-        {dollars(finalValue)}
-      </text>
-    </svg>
-  );
-}
-
-function OverviewTab({ overview }: { overview: OverviewStats }) {
-  if (overview.total_sessions === 0) {
-    return <EmptyState text="No finished games yet — play a room to see your stats here." />;
-  }
-  const streakCount = Math.abs(overview.current_streak);
-  const streakNoun = overview.current_streak > 0 ? "win" : "loss";
-  const streakLabel =
-    overview.current_streak === 0
-      ? "—"
-      : `${streakCount} ${streakNoun}${streakCount === 1 ? "" : streakNoun === "win" ? "s" : "es"}`;
-
-  return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="text-center">
-        <p className="text-xs uppercase tracking-widest text-muted mb-1">Total winnings</p>
+        <p className="mb-1 text-[10px] uppercase tracking-widest text-muted">Overall</p>
         <p
           data-testid="overview-total"
           className={`text-4xl font-extrabold ${
-            overview.total_cents < 0 ? "text-danger" : "text-brand-strong"
+            t.netCents < 0 ? "text-danger" : "text-brand-strong"
           }`}
         >
-          {dollars(overview.total_cents)}
+          {money(t.netCents)}
         </p>
       </div>
 
-      <TrendChart trend={overview.trend} />
-
-      <div className="grid grid-cols-2 gap-3">
-        <StatTile
-          testId="overview-taidi-cents"
-          label="Taidi"
-          value={dollars(overview.taidi_cents)}
-          valueClassName={overview.taidi_cents < 0 ? "text-danger" : "text-brand-strong"}
-          sub={`${overview.taidi_sessions} session${overview.taidi_sessions === 1 ? "" : "s"}`}
+      <div className="grid grid-cols-2 gap-2">
+        <Tile label="Sessions played" value={String(t.sessions)} testId="overview-sessions" />
+        <Tile
+          label="Most played with"
+          value={mostPlayedWith?.opponent.display_name ?? "—"}
+          sub={mostPlayedWith ? `${mostPlayedWith.sessions} sessions` : undefined}
+          testId="overview-most-played-with"
         />
-        <StatTile
-          testId="overview-mahjong-cents"
-          label="Mahjong"
-          value={dollars(overview.mahjong_cents)}
-          valueClassName={overview.mahjong_cents < 0 ? "text-danger" : "text-brand-strong"}
-          sub={`${overview.mahjong_chips} chips · ${overview.mahjong_sessions} session${
-            overview.mahjong_sessions === 1 ? "" : "s"
+        <Tile
+          label="Best game"
+          value={bw ? capitalize(bw.best) : "—"}
+          sub={bw ? money(t.byGame[bw.best].netCents) : "needs both games"}
+          tone={bw && t.byGame[bw.best].netCents >= 0 ? "pos" : undefined}
+          testId="overview-best-game"
+        />
+        <Tile
+          label="Worst game"
+          value={bw ? capitalize(bw.worst) : "—"}
+          sub={bw ? money(t.byGame[bw.worst].netCents) : "needs both games"}
+          tone={bw && t.byGame[bw.worst].netCents < 0 ? "neg" : undefined}
+          testId="overview-worst-game"
+        />
+        <Tile
+          label="Most played game"
+          value={mostPlayedGame ? capitalize(mostPlayedGame) : "—"}
+          sub={`${t.byGame.taidi.sessions} taidi · ${t.byGame.mahjong.sessions} mahjong`}
+          testId="overview-most-played-game"
+        />
+        <Tile
+          label="Avg per session"
+          value={t.sessions ? money(Math.round(t.netCents / t.sessions)) : "—"}
+          tone={t.netCents < 0 ? "neg" : "pos"}
+        />
+      </div>
+
+      <TrendLine points={cumulative(sessions)} onSelect={onSelectRoom} />
+      <SessionBars sessions={sessions} onSelect={onSelectRoom} />
+      <OpponentBars
+        rows={opponents}
+        selected={filters.withPlayers}
+        onToggle={(id) =>
+          setFilters({
+            ...filters,
+            withPlayers: filters.withPlayers.includes(id)
+              ? filters.withPlayers.filter((p) => p !== id)
+              : [...filters.withPlayers, id],
+          })
+        }
+      />
+      <ResultScatter sessions={sessions} />
+    </div>
+  );
+}
+
+function TaidiTab({ sessions, t }: { sessions: SessionFact[]; t: Totals }) {
+  if (t.byGame.taidi.sessions === 0) {
+    return <p className="py-8 text-center text-sm text-muted">No Taidi sessions in this range.</p>;
+  }
+  const normalRounds = t.payerRounds - t.doubleRounds - t.tripleRounds;
+  return (
+    <div className="space-y-4">
+      <div className="text-center">
+        <p className="mb-1 text-[10px] uppercase tracking-widest text-muted">Taidi profit</p>
+        <p
+          data-testid="taidi-total"
+          className={`text-3xl font-extrabold ${
+            t.byGame.taidi.netCents < 0 ? "text-danger" : "text-brand-strong"
           }`}
-        />
-        <StatTile label="Total sessions" value={String(overview.total_sessions)} />
-        <StatTile testId="overview-streak" label="Current streak" value={streakLabel} />
-        <StatTile
-          label="Favorite game"
-          value={overview.favorite_game ? capitalize(overview.favorite_game) : "—"}
-        />
-        <StatTile
-          label="Last played"
-          value={overview.last_played ? formatDate(overview.last_played) : "—"}
-        />
+        >
+          {money(t.byGame.taidi.netCents)}
+        </p>
       </div>
-    </div>
-  );
-}
 
-function TaidiTab({ stats }: { stats: TaidiPlayerStats | null }) {
-  if (!stats) return <EmptyState text="No finished Taidi games yet." />;
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3">
-        <StatTile
-          testId="taidi-round-win-rate"
+      <div className="grid grid-cols-2 gap-2">
+        <Tile label="Sessions played" value={String(t.byGame.taidi.sessions)} />
+        <Tile
           label="Round win rate"
-          value={pct(stats.round_win_rate)}
-          sub={`${stats.round_wins} of ${stats.rounds_played} rounds`}
+          value={pct(rate(t.roundsWon, t.roundsPlayed))}
+          sub={`${t.roundsWon} of ${t.roundsPlayed}`}
+          testId="taidi-round-win-rate"
         />
-        <StatTile
-          testId="taidi-profit-rate"
+        <Tile
           label="Profit rate"
-          value={pct(stats.profit_rate)}
-          sub={`${stats.profit_rounds} of ${stats.rounds_played} rounds`}
+          value={pct(rate(t.profitRounds, t.roundsPlayed))}
+          sub={`${t.profitRounds} rounds up`}
+          testId="taidi-profit-rate"
         />
-        <StatTile
-          testId="taidi-double-rate"
+        <Tile
+          label="Trapping rate"
+          value={pct(rate(t.trappingWins, t.roundsWon))}
+          sub={`${t.trappingWins} of ${t.roundsWon} wins caught someone`}
+          testId="taidi-trapping-rate"
+        />
+        <Tile
           label="Double rate"
-          value={pct(stats.double_rate)}
-          sub={`${stats.double_rounds} of ${stats.payer_rounds} losing rounds`}
+          value={pct(rate(t.doubleRounds, t.payerRounds))}
+          sub={`${t.doubleRounds} of ${t.payerRounds} losing rounds`}
+          testId="taidi-double-rate"
         />
-        <StatTile
-          testId="taidi-triple-rate"
+        <Tile
           label="Triple rate"
-          value={pct(stats.triple_rate)}
-          sub={`${stats.triple_rounds} of ${stats.payer_rounds} losing rounds`}
+          value={pct(rate(t.tripleRounds, t.payerRounds))}
+          sub={`${t.tripleRounds} of ${t.payerRounds} losing rounds`}
+          testId="taidi-triple-rate"
         />
-        <StatTile label="Special hands claimed" value={String(stats.special_hands_claimed)} />
-        <StatTile
-          label="Sessions won"
-          value={`${stats.lifetime.wins} of ${stats.lifetime.games}`}
+        <Tile
+          label="Special hand rate"
+          value={pct(rate(t.specialHands, t.roundsPlayed))}
+          sub={`${t.specialHands} claimed`}
+          testId="taidi-special-rate"
         />
+        <Tile label="Rounds played" value={String(t.roundsPlayed)} />
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        <StatTile
-          label="Best round"
-          value={stats.best_round_cents != null ? dollars(stats.best_round_cents) : "—"}
-          valueClassName={
-            stats.best_round_cents != null && stats.best_round_cents < 0
-              ? "text-danger"
-              : "text-brand-strong"
-          }
-        />
-        <StatTile
-          label="Worst round"
-          value={stats.worst_round_cents != null ? dollars(stats.worst_round_cents) : "—"}
-          valueClassName={
-            stats.worst_round_cents != null && stats.worst_round_cents < 0
-              ? "text-danger"
-              : "text-brand-strong"
-          }
-        />
-      </div>
+
+      <SplitDonut
+        title="How your losing rounds go"
+        centerLabel="losing rounds"
+        testId="chart-taidi-multipliers"
+        slices={[
+          { label: "Normal", value: Math.max(0, normalRounds) },
+          { label: "Doubled", value: t.doubleRounds },
+          { label: "Tripled", value: t.tripleRounds },
+        ]}
+      />
+      <TrendLine points={cumulative(sessions)} />
     </div>
   );
 }
 
-const MAHJONG_KIND_LABELS: Record<string, string> = {
-  yao: "咬 Yao",
-  gang: "槓 Gang",
-  hu: "胡 Hu",
-  bao: "包 Bao",
-  zimo_bonus: "Zimo bonus",
-  klppdd: "KLPPDD",
-};
-
-function MahjongTab({ stats }: { stats: MahjongPlayerStats | null }) {
-  if (!stats) return <EmptyState text="No finished Mahjong games yet." />;
-
-  const modeEntries = (["direct", "zimo", "bao"] as const).filter(
-    (m) => (stats.win_mode_counts[m] ?? 0) > 0,
-  );
-  const modeMax = Math.max(1, ...modeEntries.map((m) => stats.win_mode_counts[m] ?? 0));
-  const taiEntries = Object.entries(stats.tai_distribution).sort(
-    ([a], [b]) => Number(a) - Number(b),
-  );
-  const taiMax = Math.max(1, ...taiEntries.map(([, c]) => c));
-  const kindEntries = Object.entries(stats.profit_by_kind);
-
+function MahjongTab({ sessions, t }: { sessions: SessionFact[]; t: Totals }) {
+  if (t.byGame.mahjong.sessions === 0) {
+    return (
+      <p className="py-8 text-center text-sm text-muted">No Mahjong sessions in this range.</p>
+    );
+  }
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3">
-        <StatTile
+    <div className="space-y-4">
+      <div className="text-center">
+        <p className="mb-1 text-[10px] uppercase tracking-widest text-muted">Mahjong profit</p>
+        <p
+          data-testid="mahjong-total"
+          className={`text-3xl font-extrabold ${
+            t.byGame.mahjong.netCents < 0 ? "text-danger" : "text-brand-strong"
+          }`}
+        >
+          {money(t.byGame.mahjong.netCents)}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Tile label="Sessions played" value={String(t.byGame.mahjong.sessions)} />
+        <Tile
+          label="Hand win rate"
+          value={pct(rate(t.handsWon, t.handsPlayed))}
+          sub={`${t.handsWon} of ${t.handsPlayed}`}
           testId="mahjong-hu-rate"
-          label="HU rate"
-          value={pct(stats.hu_rate)}
-          sub={`${stats.hu_count} of ${stats.hands_played} hands`}
         />
-        <StatTile
-          testId="mahjong-dealer-win-rate"
+        <Tile
+          label="Zimo rate"
+          value={pct(rate(t.zimoWins, t.handsWon))}
+          sub={`${t.zimoWins} of ${t.handsWon} wins self-drawn`}
+          testId="mahjong-zimo-rate"
+        />
+        <Tile
+          label="Shooting rate"
+          value={pct(rate(t.shotHands, t.lostHands))}
+          sub={`${t.shotHands} of ${t.lostHands} lost hands`}
+          tone={rate(t.shotHands, t.lostHands) !== null ? "neg" : undefined}
+          testId="mahjong-shooting-rate"
+        />
+        <Tile
+          label="Yao rate"
+          value={pct(rate(t.yao + t.anyao, t.handsPlayed))}
+          sub={`${t.yao} yao · ${t.anyao} anyao`}
+          testId="mahjong-yao-rate"
+        />
+        <Tile
+          label="Gang rate"
+          value={pct(rate(t.gang + t.angang, t.handsPlayed))}
+          sub={`${t.gang} gang · ${t.angang} angang`}
+          testId="mahjong-gang-rate"
+        />
+        <Tile
           label="Dealer win rate"
-          value={pct(stats.dealer_win_rate)}
-          sub={`${stats.dealer_wins} of ${stats.dealer_hands} dealer hands`}
+          value={pct(rate(t.dealerWins, t.dealerHands))}
+          sub={`${t.dealerWins} of ${t.dealerHands} dealer hands`}
         />
-        <StatTile
+        <Tile
           label="Average tai"
-          value={stats.avg_tai_on_wins ? stats.avg_tai_on_wins.toFixed(1) : "—"}
-        />
-        <StatTile
-          label="Sessions won"
-          value={`${stats.lifetime.wins} of ${stats.lifetime.games}`}
+          value={t.taiWins ? (t.taiTotal / t.taiWins).toFixed(1) : "—"}
+          sub="on your wins"
         />
       </div>
 
-      {modeEntries.length > 0 && (
-        <div>
-          <p className="text-xs uppercase tracking-widest text-muted mb-2">Win method</p>
-          <div className="space-y-2">
-            {modeEntries.map((m) => (
-              <BarRow
-                key={m}
-                label={capitalize(m)}
-                value={stats.win_mode_counts[m] ?? 0}
-                max={modeMax}
-                formatValue={(v) => String(v)}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {taiEntries.length > 0 && (
-        <div>
-          <p className="text-xs uppercase tracking-widest text-muted mb-2">Tai distribution</p>
-          <div className="space-y-2">
-            {taiEntries.map(([tai, count]) => (
-              <BarRow
-                key={tai}
-                label={`${tai} 台`}
-                value={count}
-                max={taiMax}
-                formatValue={(v) => String(v)}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {kindEntries.length > 0 && (
-        <div>
-          <p className="text-xs uppercase tracking-widest text-muted mb-2">Profit by action</p>
-          <div className="space-y-2">
-            {kindEntries.map(([kind, amount]) => (
-              <div
-                key={kind}
-                className="flex items-center justify-between rounded-xl border border-border bg-surface px-4 py-2.5 text-sm"
-              >
-                <span className="font-medium">{MAHJONG_KIND_LABELS[kind] ?? kind}</span>
-                <span className={`font-bold ${amount < 0 ? "text-danger" : "text-brand-strong"}`}>
-                  {amount >= 0 ? "+" : ""}
-                  {amount} chips
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 gap-3">
-        <StatTile
-          label="Best hand"
-          value={stats.best_hand_chips != null ? `${stats.best_hand_chips} chips` : "—"}
-          valueClassName={
-            stats.best_hand_chips != null && stats.best_hand_chips < 0
-              ? "text-danger"
-              : "text-brand-strong"
-          }
-        />
-        <StatTile
-          label="Worst hand"
-          value={stats.worst_hand_chips != null ? `${stats.worst_hand_chips} chips` : "—"}
-          valueClassName={
-            stats.worst_hand_chips != null && stats.worst_hand_chips < 0
-              ? "text-danger"
-              : "text-brand-strong"
-          }
-        />
-      </div>
+      <SplitDonut
+        title="How you win"
+        centerLabel="wins"
+        testId="chart-mahjong-modes"
+        slices={[
+          { label: "自摸 Zimo", value: t.zimoWins },
+          { label: "Direct", value: t.directWins },
+          { label: "包 Bao", value: t.baoWins },
+        ]}
+      />
+      <SplitDonut
+        title="Declarations"
+        centerLabel="declared"
+        testId="chart-mahjong-declarations"
+        slices={[
+          { label: "咬 Yao", value: t.yao },
+          { label: "暗咬 Anyao", value: t.anyao },
+          { label: "槓 Gang", value: t.gang },
+          { label: "暗槓 Angang", value: t.angang },
+        ]}
+      />
+      <TrendLine points={cumulative(sessions)} />
     </div>
   );
 }
@@ -407,33 +402,39 @@ export default function StatsPage() {
   const router = useRouter();
   const { user, checked } = useStoredUser();
   const [tab, setTab] = useState<Tab>("overview");
-  const [data, setData] = useState<StatsResponse | null>(null);
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [all, setAll] = useState<SessionFact[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // See the matching comment in room/[roomId]/page.tsx and new/page.tsx —
-    // must wait for `checked`, or a genuinely signed-in user gets bounced
-    // before the client-only auth read resolves.
     if (checked && !user) router.replace("/");
   }, [checked, user, router]);
 
   useEffect(() => {
     if (!user) return;
-    statsApi
-      .getMine()
-      .then(setData)
+    request<StatsFactsResponse>("/stats/facts")
+      .then((r) => setAll(r.sessions))
       .catch((e) => setError(e instanceof ApiError ? e.message : "Couldn't load stats."));
   }, [user]);
+
+  // Everything below is derived, so changing a filter re-renders instantly
+  // instead of costing a round trip.
+  const scoped = useMemo(() => {
+    if (!all) return [];
+    const byTab = tab === "overview" ? all : all.filter((s) => s.game_type === tab);
+    return applyFilters(byTab, filters);
+  }, [all, filters, tab]);
+  const t = useMemo(() => totals(scoped), [scoped]);
 
   if (!user) return null;
 
   return (
-    <main className="flex-1 px-5 py-8 max-w-md mx-auto w-full">
-      <div className="flex items-center gap-3 mb-6">
+    <main className="mx-auto w-full max-w-md flex-1 px-5 py-8">
+      <div className="mb-5 flex items-center gap-3">
         <button
           onClick={() => router.push("/")}
           data-testid="back-btn"
-          className="h-11 w-11 rounded-full border border-border flex items-center justify-center text-lg font-bold text-brand"
+          className="flex h-11 w-11 items-center justify-center rounded-full border border-border text-lg font-bold text-brand"
         >
           ←
         </button>
@@ -441,36 +442,61 @@ export default function StatsPage() {
       </div>
 
       {error && (
-        <p data-testid="stats-error" className="text-sm text-center text-danger mb-4">
+        <p data-testid="stats-error" className="mb-4 text-center text-sm text-danger">
           {error}
         </p>
       )}
 
-      {!data ? (
+      {!all ? (
         <p className="text-center text-sm text-muted">Loading…</p>
+      ) : all.length === 0 ? (
+        <p data-testid="stats-empty" className="py-8 text-center text-sm text-muted">
+          No finished games yet — play a room to see your stats here.
+        </p>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-4">
           <div className="grid grid-cols-3 gap-2">
-            {(["overview", "taidi", "mahjong"] as const).map((t) => (
+            {(["overview", "taidi", "mahjong"] as const).map((x) => (
               <button
-                key={t}
+                key={x}
                 type="button"
-                onClick={() => setTab(t)}
-                data-testid={`stats-tab-${t}`}
+                onClick={() => setTab(x)}
+                data-testid={`stats-tab-${x}`}
                 className={`rounded-xl border px-2 py-2 text-xs font-semibold capitalize ${
-                  tab === t
+                  tab === x
                     ? "border-brand-strong bg-[#FFF8E1] text-brand"
                     : "border-border bg-surface text-muted"
                 }`}
               >
-                {t}
+                {x}
               </button>
             ))}
           </div>
 
-          {tab === "overview" && <OverviewTab overview={data.overview} />}
-          {tab === "taidi" && <TaidiTab stats={data.taidi} />}
-          {tab === "mahjong" && <MahjongTab stats={data.mahjong} />}
+          <FilterBar
+            filters={filters}
+            setFilters={setFilters}
+            shown={scoped.length}
+            total={tab === "overview" ? all.length : all.filter((s) => s.game_type === tab).length}
+          />
+
+          {scoped.length === 0 ? (
+            <p data-testid="stats-no-match" className="py-8 text-center text-sm text-muted">
+              No sessions match these filters.
+            </p>
+          ) : tab === "overview" ? (
+            <OverviewTab
+              sessions={scoped}
+              t={t}
+              filters={filters}
+              setFilters={setFilters}
+              onSelectRoom={(roomId) => router.push(`/room/${roomId}`)}
+            />
+          ) : tab === "taidi" ? (
+            <TaidiTab sessions={scoped} t={t} />
+          ) : (
+            <MahjongTab sessions={scoped} t={t} />
+          )}
         </div>
       )}
     </main>
