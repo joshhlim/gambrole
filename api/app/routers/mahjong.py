@@ -42,6 +42,7 @@ from ..schemas import (
     StartMahjongRequest,
 )
 from ..time import utcnow
+from ..users_service import ensure_user
 
 router = APIRouter(prefix="/rooms/{room_id}/mahjong", tags=["mahjong"])
 
@@ -103,6 +104,7 @@ async def join(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
+    await ensure_user(session, user)
     try:
         await ensure_no_other_active_room(session, user.user_id, excluding_room_id=room_id)
     except AlreadyInActiveRoom as e:

@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .routers import auth as auth_router
 from .routers import debts as debts_router
+from .routers import friends as friends_router
 from .routers import history as history_router
 from .routers import mahjong as mahjong_router
 from .routers import rooms as rooms_router
@@ -30,6 +31,7 @@ app.include_router(rooms_router.router)
 app.include_router(mahjong_router.router)
 app.include_router(stats_router.router)
 app.include_router(debts_router.router)
+app.include_router(friends_router.router)
 app.include_router(history_router.router)
 
 

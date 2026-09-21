@@ -86,6 +86,48 @@ room_participants = Table(
     Index("ix_room_participants_player_id", "player_id"),
 )
 
+users = Table(
+    "users",
+    metadata,
+    # Always the JWT `sub`, which in Supabase mode is auth.users.id — so this
+    # joins directly to rooms.host_id, room_participants.player_id and the
+    # settlements columns without any mapping.
+    Column("user_id", PGUUID(as_uuid=True), primary_key=True),
+    # Mirrored from the token's claims so search works in dev and prod alike
+    # (and so a lookup doesn't have to reach into Supabase's own auth schema,
+    # which local dev and the test suite don't have). NEVER returned by any
+    # endpoint: you can find someone whose address you already know, but the
+    # API won't tell you anyone's address.
+    Column("email", String(320), nullable=True),
+    Column("display_name", String(100), nullable=False),
+    # Stored lowercased and matched case-insensitively — "@Josh" and "@josh"
+    # must not be two different people. Null until claimed.
+    Column("username", String(24), nullable=True, unique=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Index("ix_users_email", "email"),
+)
+
+friendships = Table(
+    "friendships",
+    metadata,
+    Column("id", PGUUID(as_uuid=True), primary_key=True),
+    Column("requester_id", PGUUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False),
+    Column("addressee_id", PGUUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False),
+    # pending | accepted. A decline deletes the row rather than recording a
+    # rejection: it lets the pair try again later, and it means the app never
+    # has to tell anyone they were turned down.
+    Column("status", String(16), nullable=False, server_default="pending"),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("responded_at", DateTime(timezone=True), nullable=True),
+    # One row per ordered pair. The reverse direction is allowed to exist
+    # transiently, and friends_service resolves it by auto-accepting when two
+    # people request each other.
+    UniqueConstraint("requester_id", "addressee_id", name="uq_friendships_pair"),
+    Index("ix_friendships_requester", "requester_id"),
+    Index("ix_friendships_addressee", "addressee_id"),
+)
+
 settlements = Table(
     "settlements",
     metadata,

@@ -47,6 +47,7 @@ from ..schemas import (
     SubmitForRequest,
 )
 from ..time import utcnow
+from ..users_service import ensure_user
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
 
@@ -123,6 +124,7 @@ async def create(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
+    await ensure_user(session, user)
     room_id = uuid4()
     try:
         state, invite_code, game_type = await create_room(
@@ -187,6 +189,7 @@ async def join(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
+    await ensure_user(session, user)
     try:
         await ensure_no_other_active_room(session, user.user_id, excluding_room_id=room_id)
     except AlreadyInActiveRoom as e:

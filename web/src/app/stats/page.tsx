@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ApiError, request } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
 import type { SessionFact, StatsFactsResponse } from "@/lib/statsFactsTypes";
@@ -150,7 +150,7 @@ function OverviewTab({
   t: Totals;
   filters: Filters;
   setFilters: (f: Filters) => void;
-  onSelectRoom: (roomId: string) => void;
+  onSelectRoom?: (roomId: string) => void;
 }) {
   const opponents = useMemo(() => opponentTally(sessions), [sessions]);
   const mostPlayedWith = opponents[0];
@@ -398,12 +398,34 @@ function MahjongTab({ sessions, t }: { sessions: SessionFact[]; t: Totals }) {
   );
 }
 
+/** useSearchParams() can't run during prerender, so the part that reads the
+ * ?player= target lives under a Suspense boundary and the route stays
+ * static. */
 export default function StatsPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="mx-auto w-full max-w-md flex-1 px-5 py-8">
+          <p className="text-center text-sm text-muted">Loading…</p>
+        </main>
+      }
+    >
+      <StatsView />
+    </Suspense>
+  );
+}
+
+function StatsView() {
   const router = useRouter();
+  const search = useSearchParams();
   const { user, checked } = useStoredUser();
+  // Viewing a friend's stats is the same page against a different player —
+  // the API returns an identical shape, gated on friendship.
+  const viewing = search.get("player");
   const [tab, setTab] = useState<Tab>("overview");
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [all, setAll] = useState<SessionFact[] | null>(null);
+  const [whose, setWhose] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -412,10 +434,20 @@ export default function StatsPage() {
 
   useEffect(() => {
     if (!user) return;
-    request<StatsFactsResponse>("/stats/facts")
-      .then((r) => setAll(r.sessions))
-      .catch((e) => setError(e instanceof ApiError ? e.message : "Couldn't load stats."));
-  }, [user]);
+    let cancelled = false;
+    request<StatsFactsResponse>(viewing ? `/stats/facts/${viewing}` : "/stats/facts")
+      .then((r) => {
+        if (cancelled) return;
+        setAll(r.sessions);
+        setWhose(viewing ? (r.player?.display_name ?? "Your friend") : null);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof ApiError ? e.message : "Couldn't load stats.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, viewing]);
 
   // Everything below is derived, so changing a filter re-renders instantly
   // instead of costing a round trip.
@@ -432,13 +464,15 @@ export default function StatsPage() {
     <main className="mx-auto w-full max-w-md flex-1 px-5 py-8">
       <div className="mb-5 flex items-center gap-3">
         <button
-          onClick={() => router.push("/")}
+          onClick={() => router.push(viewing ? "/friends" : "/")}
           data-testid="back-btn"
           className="flex h-11 w-11 items-center justify-center rounded-full border border-border text-lg font-bold text-brand"
         >
           ←
         </button>
-        <h1 className="text-lg font-extrabold text-brand">My Stats</h1>
+        <h1 className="truncate text-lg font-extrabold text-brand">
+          {whose ? `${whose}'s Stats` : "My Stats"}
+        </h1>
       </div>
 
       {error && (
@@ -490,7 +524,7 @@ export default function StatsPage() {
               t={t}
               filters={filters}
               setFilters={setFilters}
-              onSelectRoom={(roomId) => router.push(`/room/${roomId}`)}
+              onSelectRoom={viewing ? undefined : (roomId) => router.push(`/room/${roomId}`)}
             />
           ) : tab === "taidi" ? (
             <TaidiTab sessions={scoped} t={t} />

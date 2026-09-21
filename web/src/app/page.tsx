@@ -176,6 +176,14 @@ export default function HomePage() {
             </button>
 
             <button
+              onClick={() => router.push("/friends")}
+              data-testid="friends-btn"
+              className="w-full rounded-xl border border-border py-3 text-sm font-semibold text-muted"
+            >
+              Friends
+            </button>
+
+            <button
               onClick={() => router.push("/debts")}
               data-testid="debts-btn"
               className="w-full rounded-xl border border-border py-3 text-sm font-semibold text-muted"

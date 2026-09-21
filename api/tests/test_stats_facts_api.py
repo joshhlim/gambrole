@@ -143,3 +143,77 @@ async def test_sessions_are_oldest_first_and_exclude_games_not_played(make_devic
     # Bob only played the first, so that's all he sees.
     bob_sessions = (await bob.get("/stats/facts")).json()["sessions"]
     assert [s["room_id"] for s in bob_sessions] == [first]
+
+
+async def _befriend(a, b):
+    await a.get("/users/me")
+    await b.get("/users/me")
+    await a.post("/friends/requests", json={"user_id": b.user_id})
+    edge = (await b.get("/friends")).json()["incoming"][0]["id"]
+    await b.post(f"/friends/requests/{edge}/accept")
+
+
+async def _play(host, guest):
+    r = await host.post("/rooms")
+    room_id, invite = r.json()["room_id"], r.json()["invite_code"]
+    await guest.get(f"/rooms/by-code/{invite}")
+    r = await guest.post(f"/rooms/{room_id}/join")
+    st = r.json()
+    r = await host.post(
+        f"/rooms/{room_id}/start", json={"expected_seq": st["seq"], "rules": TAIDI_RULES}
+    )
+    st = r.json()
+    r = await host.post(f"/rooms/{room_id}/win", json={"expected_seq": st["seq"]})
+    st = r.json()
+    r = await guest.post(f"/rooms/{room_id}/cards", json={"expected_seq": st["seq"], "cards": 5})
+    st = r.json()
+    await host.post(f"/rooms/{room_id}/end", json={"expected_seq": st["seq"]})
+
+
+async def test_friend_stats_require_friendship(make_device):
+    alice = await make_device("Alice")
+    bob = await make_device("Bob")
+    stranger = await make_device("Stranger")
+    await _play(alice, bob)
+    await stranger.get("/users/me")
+
+    # Having played together is not access — only an accepted friendship is.
+    assert (await bob.get(f"/stats/facts/{alice.user_id}")).status_code == 403
+    assert (await stranger.get(f"/stats/facts/{alice.user_id}")).status_code == 403
+
+    await _befriend(alice, bob)
+    r = await bob.get(f"/stats/facts/{alice.user_id}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["player"]["display_name"] == "Alice"
+    # Alice won, so her numbers are hers — not a copy of Bob's.
+    assert body["sessions"][0]["net_cents"] > 0
+    assert body["sessions"][0]["taidi"]["rounds_won"] == 1
+
+    # A stranger still can't, and unfriending revokes it again.
+    assert (await stranger.get(f"/stats/facts/{alice.user_id}")).status_code == 403
+    await alice.delete(f"/friends/{bob.user_id}")
+    assert (await bob.get(f"/stats/facts/{alice.user_id}")).status_code == 403
+
+
+async def test_your_own_facts_need_no_friendship(make_device):
+    alice = await make_device("Alice")
+    bob = await make_device("Bob")
+    await _play(alice, bob)
+
+    r = await alice.get(f"/stats/facts/{alice.user_id}")
+    assert r.status_code == 200, r.text
+    assert r.json()["player"]["display_name"] == "Alice"
+    # Same payload as the unparameterised route.
+    assert r.json()["sessions"] == (await alice.get("/stats/facts")).json()["sessions"]
+
+
+async def test_a_pending_request_does_not_grant_access(make_device):
+    alice = await make_device("Alice")
+    bob = await make_device("Bob")
+    await _play(alice, bob)
+    await alice.get("/users/me")
+    await bob.get("/users/me")
+    await bob.post("/friends/requests", json={"user_id": alice.user_id})
+
+    assert (await bob.get(f"/stats/facts/{alice.user_id}")).status_code == 403

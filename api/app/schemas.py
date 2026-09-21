@@ -68,3 +68,11 @@ class DeclareHuRequest(BaseModel):
     tai: int
     zimo_bonus: bool = False
     klppdd: bool = False
+
+
+class SetUsernameRequest(BaseModel):
+    username: str
+
+
+class SendFriendRequest(BaseModel):
+    user_id: UUID

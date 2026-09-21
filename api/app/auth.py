@@ -56,6 +56,9 @@ def _jwks_url() -> str:
 class CurrentUser:
     user_id: UUID
     display_name: str
+    # Present in Supabase mode, where it's how one player finds another
+    # (see users.email). Dev tokens carry no address, so it's None there.
+    email: str | None = None
 
 
 def mint_dev_token(display_name: str, user_id: UUID | None = None) -> tuple[str, UUID]:
@@ -104,6 +107,11 @@ def _decode(token: str) -> dict[str, Any]:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Invalid token: {e}") from e
 
 
+def _email_from_claims(claims: dict[str, Any]) -> str | None:
+    email = claims.get("email")
+    return str(email).strip().lower() if email else None
+
+
 def _display_name_from_claims(claims: dict[str, Any]) -> str:
     if settings.auth_mode == "dev":
         return str(claims.get("display_name", "Player"))
@@ -120,4 +128,8 @@ async def get_current_user(
     if creds is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token.")
     claims = _decode(creds.credentials)
-    return CurrentUser(user_id=UUID(claims["sub"]), display_name=_display_name_from_claims(claims))
+    return CurrentUser(
+        user_id=UUID(claims["sub"]),
+        display_name=_display_name_from_claims(claims),
+        email=_email_from_claims(claims),
+    )

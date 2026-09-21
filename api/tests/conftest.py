@@ -83,6 +83,12 @@ class Device:
     async def post(self, url: str, **kw):
         return await self._client.post(url, headers=self._headers, **kw)
 
+    async def put(self, url: str, **kw):
+        return await self._client.put(url, headers=self._headers, **kw)
+
+    async def delete(self, url: str, **kw):
+        return await self._client.delete(url, headers=self._headers, **kw)
+
 
 @pytest_asyncio.fixture
 async def make_device(client: AsyncClient):

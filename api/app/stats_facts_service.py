@@ -25,6 +25,7 @@ from taidi_core.stats import taidi_session_facts
 from .events_store import rebuild_mahjong_state_with_invite, rebuild_taidi_state_with_invite
 from .money import MAHJONG_CHIP_VALUE_CENTS
 from .stats_service import ended_room_refs
+from .users_service import UserProfile, profiles_for
 
 
 class OpponentRef(BaseModel):
@@ -46,6 +47,10 @@ class SessionFact(BaseModel):
 
 
 class StatsFactsResponse(BaseModel):
+    #: Whose stats these are, so a page showing a friend's can say so (and
+    #: a deep link doesn't have to look the name up separately). None only
+    #: if the player has somehow never been recorded in the directory.
+    player: UserProfile | None
     #: Oldest first — the client wants them in play order to draw a
     #: cumulative trend, and reversing a list is free.
     sessions: list[SessionFact]
@@ -98,4 +103,5 @@ async def build_facts_for(session: AsyncSession, player_id: UUID) -> StatsFactsR
             )
 
     facts.sort(key=lambda f: f.ended_at)
-    return StatsFactsResponse(sessions=facts)
+    profile = (await profiles_for(session, [player_id])).get(player_id)
+    return StatsFactsResponse(player=profile, sessions=facts)

@@ -58,6 +58,9 @@ export interface SessionFact {
 }
 
 export interface StatsFactsResponse {
+  /** Whose stats these are — lets the page title itself when you're looking
+   * at a friend's, and survives a deep link. */
+  player: { user_id: string; display_name: string; username: string | null } | null;
   /** Oldest first. */
   sessions: SessionFact[];
 }
