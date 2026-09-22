@@ -93,9 +93,10 @@ async def build_history_for(session: AsyncSession, player_id: UUID) -> HistoryRe
 
         # room_participants remembers everyone who EVER joined (ADR-0007),
         # so it also matches people who ducked into the lobby and left
-        # before the game began. They didn't play it — leaving mid-game is
-        # impossible, so final membership is exactly "actually played".
-        if player_id not in state.members:
+        # before the game began. A balance is the precise test of having
+        # played: a lobby leaver has none, while someone who stepped out
+        # mid-game keeps theirs (see machine.step_out).
+        if player_id not in state.balances:
             continue
 
         rows = by_room.get(room_id, [])

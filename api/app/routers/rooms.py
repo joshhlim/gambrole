@@ -332,6 +332,43 @@ async def special_hand(
     )
 
 
+@router.post("/{room_id}/step-out")
+async def step_out(
+    room_id: UUID,
+    body: SeqOnlyRequest,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Leave a game that's already running. One-way: the engine refuses
+    mid-game joins, so there's no way back into this game afterwards. Your
+    balance stays and settles with everyone else's — see machine.step_out."""
+    return await _dispatch(
+        session,
+        room_id,
+        lambda state: machine.step_out(
+            state, expected_seq=body.expected_seq, actor=user.user_id, now=utcnow()
+        ),
+    )
+
+
+@router.post("/{room_id}/void-special")
+async def void_special(
+    room_id: UUID,
+    body: SeqOnlyRequest,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Take back your own accidental special-hand claim — see
+    machine.void_special_hand for why voiding the round can't do it."""
+    return await _dispatch(
+        session,
+        room_id,
+        lambda state: machine.void_special_hand(
+            state, expected_seq=body.expected_seq, actor=user.user_id, now=utcnow()
+        ),
+    )
+
+
 @router.post("/{room_id}/void")
 async def void(
     room_id: UUID,

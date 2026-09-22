@@ -81,6 +81,10 @@ export const api = {
     }),
   specialHand: (roomId: string, expectedSeq: number) =>
     post<RoomState>(`/rooms/${roomId}/special`, { expected_seq: expectedSeq }),
+  stepOut: (roomId: string, expectedSeq: number) =>
+    post<RoomState>(`/rooms/${roomId}/step-out`, { expected_seq: expectedSeq }),
+  voidSpecialHand: (roomId: string, expectedSeq: number) =>
+    post<RoomState>(`/rooms/${roomId}/void-special`, { expected_seq: expectedSeq }),
   voidLastRound: (roomId: string, expectedSeq: number) =>
     post<RoomState>(`/rooms/${roomId}/void`, { expected_seq: expectedSeq }),
   endGame: (roomId: string, expectedSeq: number) =>

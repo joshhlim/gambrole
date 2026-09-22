@@ -105,17 +105,17 @@ async def build_stats_for(session: AsyncSession, player_id: UUID) -> StatsRespon
     mahjong_rooms: list[MahjongRoomState] = []
     for room_id, game_type in room_refs:
         # ended_room_refs matches anyone room_participants has ever seen in
-        # the room, which includes people who joined the lobby and left
-        # before the game started. They didn't play it, so it shouldn't
-        # count toward their sessions, streak or trend — and since leaving
-        # mid-game is impossible, final membership is exactly "played it".
+        # the room, including people who joined the lobby and left before
+        # the game started. Holding a balance is the precise test of having
+        # played: a lobby leaver has none, someone who stepped out mid-game
+        # still does (see machine.step_out).
         if game_type == "mahjong":
             mahjong_state, _invite_code = await rebuild_mahjong_state_with_invite(session, room_id)
-            if player_id in mahjong_state.members:
+            if player_id in mahjong_state.balances:
                 mahjong_rooms.append(mahjong_state)
         else:
             taidi_state, _invite_code = await rebuild_taidi_state_with_invite(session, room_id)
-            if player_id in taidi_state.members:
+            if player_id in taidi_state.balances:
                 taidi_rooms.append(taidi_state)
 
     taidi_stats = taidi_round_stats(taidi_rooms).get(player_id)

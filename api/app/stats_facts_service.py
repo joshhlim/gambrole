@@ -68,12 +68,12 @@ async def build_facts_for(session: AsyncSession, player_id: UUID) -> StatsFactsR
         ]
 
     for room_id, game_type in room_refs:
-        # ended_room_refs matches anyone who ever joined, including players
-        # who ducked into the lobby and left before it started — they didn't
-        # play this game. Same filter as history/stats.
+        # A balance is the test of having played — see history_service for
+        # why membership isn't (someone who stepped out mid-game keeps the
+        # former but not the latter).
         if game_type == "mahjong":
             mj_state, _invite = await rebuild_mahjong_state_with_invite(session, room_id)
-            if player_id not in mj_state.members:
+            if player_id not in mj_state.balances:
                 continue
             assert mj_state.ended_at is not None  # ended_room_refs filters on status
             facts.append(
@@ -88,7 +88,7 @@ async def build_facts_for(session: AsyncSession, player_id: UUID) -> StatsFactsR
             )
         else:
             td_state, _invite = await rebuild_taidi_state_with_invite(session, room_id)
-            if player_id not in td_state.members:
+            if player_id not in td_state.balances:
                 continue
             assert td_state.ended_at is not None
             facts.append(

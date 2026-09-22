@@ -80,11 +80,15 @@ def taidi_round_stats(rooms: list[RoomState]) -> dict[UUID, TaidiPlayerStats]:
                 )
                 net_this_round[t.to_player] = net_this_round.get(t.to_player, 0) + t.amount_cents
 
-            # Membership is frozen for the whole IN_PROGRESS duration (join/
-            # leave both require LOBBY), so every current member of an ended
-            # room played every one of its resolved rounds.
-            for pid, member in room.members.items():
-                s = _get(pid, member.display_name)
+            # Membership is no longer frozen for the whole game — a player
+            # can step out mid-way (machine.step_out) — so credit the people
+            # who actually played this round rather than whoever remains.
+            participants = set(round_.cards_submitted)
+            if round_.winner is not None:
+                participants.add(round_.winner)
+            for pid in participants:
+                member = room.members.get(pid)
+                s = _get(pid, member.display_name if member else str(pid))
                 s.rounds_played += 1
 
                 if round_.winner == pid:
@@ -128,6 +132,12 @@ def taidi_session_facts(room: RoomState, player_id: UUID) -> TaidiSessionFacts:
         facts.special_hands += round_.special_counts.get(player_id, 0)
 
         if round_.phase != RoundPhase.RESOLVED or round_.rules_snapshot is None:
+            continue
+        # A player who stepped out mid-game is absent from later rounds, and
+        # someone can't be credited with a round they weren't dealt into. In
+        # a resolved round every non-winner submitted a count, so this is
+        # exactly the set of people who played it.
+        if player_id != round_.winner and player_id not in round_.cards_submitted:
             continue
         facts.rounds_played += 1
 

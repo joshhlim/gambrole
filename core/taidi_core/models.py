@@ -128,6 +128,10 @@ class RoomState(BaseModel):
     rules: GameRules | None = None
     rounds: list[RoundState] = Field(default_factory=list)
     balances: dict[UUID, int] = Field(default_factory=dict)
+    # Players who stepped out mid-game, by name. They keep a balance and
+    # still appear in the standings and the settlement, so something has to
+    # remember what to call them once they're out of `members`.
+    departed: dict[UUID, str] = Field(default_factory=dict)
     created_at: datetime
     ended_at: datetime | None = None
 
@@ -160,11 +164,13 @@ class EventType(StrEnum):
     WIN_CLAIMED = "win_claimed"
     CARDS_SUBMITTED = "cards_submitted"
     SPECIAL_HAND = "special_hand"
+    SPECIAL_HAND_VOIDED = "special_hand_voided"
     ROUND_RESOLVED = "round_resolved"
     ROUND_VOIDED = "round_voided"
     SUBMITTED_FOR = "submitted_for"
     GAME_ENDED = "game_ended"
     PLAYER_LEFT = "player_left"
+    PLAYER_STEPPED_OUT = "player_stepped_out"
     ROOM_DISBANDED = "room_disbanded"
 
 

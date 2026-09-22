@@ -359,14 +359,19 @@ class TestEndGame:
         with pytest.raises(IllegalTransition):
             machine.end_game(state, expected_seq=state.seq, actor=A, now=now)
 
-    def test_any_member_can_end(self, now):
+    def test_only_the_host_can_end(self, now):
+        """Ending finalises every balance and creates debts, so it takes the
+        host — the same bar as starting or disbanding."""
         state, (A, B, C) = _room(now)
         state = machine.fold(
             state,
             machine.start_game(state, expected_seq=state.seq, actor=A, rules=GameRules(), now=now),
         )
+        with pytest.raises(NotAuthorized):
+            machine.end_game(state, expected_seq=state.seq, actor=C, now=now)
+
         state = machine.fold(
-            state, machine.end_game(state, expected_seq=state.seq, actor=C, now=now)
+            state, machine.end_game(state, expected_seq=state.seq, actor=A, now=now)
         )
         assert state.status == RoomStatus.ENDED
         assert state.ended_at == now
@@ -437,7 +442,7 @@ def test_full_simulated_game(now):
     # Round 3: C wins, no cards owed elsewhere
     state = _play_round(state, now, winner=C, others={A: 1, B: 1})
 
-    state = machine.fold(state, machine.end_game(state, expected_seq=state.seq, actor=B, now=now))
+    state = machine.fold(state, machine.end_game(state, expected_seq=state.seq, actor=A, now=now))
 
     assert state.status == RoomStatus.ENDED
     assert sum(state.balances.values()) == 0

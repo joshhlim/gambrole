@@ -66,6 +66,9 @@ export interface RoomState {
   rules: GameRules | null;
   rounds: RoundState[];
   balances: Record<string, number>;
+  /** Players who stepped out mid-game, by name — they still hold a balance
+   * and appear in the standings, so their name has to come from here. */
+  departed: Record<string, string>;
   created_at: string;
   ended_at: string | null;
   invite_code: string;

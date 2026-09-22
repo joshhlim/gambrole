@@ -19,6 +19,7 @@ from .db import events as events_table
 from .db import settlements as settlements_table
 from .events_store import rebuild_mahjong_state_with_invite, rebuild_taidi_state_with_invite
 from .time import utcnow
+from .users_service import profiles_for
 
 
 class DebtView(BaseModel):
@@ -83,6 +84,11 @@ async def build_debts_for(session: AsyncSession, player_id: UUID) -> DebtsRespon
         else:
             state, _invite_code = await rebuild_taidi_state_with_invite(session, room_id)
         names_by_room[room_id] = {pid: m.display_name for pid, m in state.members.items()}
+        # Someone who stepped out mid-game is no longer a member but is
+        # still owed (or owes) money, so their name has to come from
+        # somewhere — the directory added with friends.
+        for pid in state.balances:
+            names_by_room[room_id].setdefault(pid, "")
 
     # How each of these games ended — see DebtView's comment.
     end_rows = (
@@ -94,6 +100,16 @@ async def build_debts_for(session: AsyncSession, player_id: UUID) -> DebtsRespon
         )
     ).all()
     end_by_room = {row.room_id: row for row in end_rows}
+
+    # Fill any gaps from the user directory in one query.
+    missing = [pid for names in names_by_room.values() for pid, name in names.items() if not name]
+    if missing:
+        directory = await profiles_for(session, missing)
+        for names in names_by_room.values():
+            for pid, name in list(names.items()):
+                if not name:
+                    profile = directory.get(pid)
+                    names[pid] = profile.display_name if profile else "Former player"
 
     owing: list[DebtView] = []
     owed: list[DebtView] = []

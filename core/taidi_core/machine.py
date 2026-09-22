@@ -142,6 +142,80 @@ def leave_room(
     ]
 
 
+def step_out(
+    state: RoomState,
+    *,
+    expected_seq: int,
+    actor: UUID,
+    now: datetime | None = None,
+    event_id: UUID | None = None,
+) -> list[Event]:
+    """Walk away from a game that's already running.
+
+    Distinct from `leave_room`, which is lobby-only and forgets you
+    entirely: here you've played, so your balance stays on the table and
+    settles with everyone else's at the end. You just take no part in
+    further rounds.
+
+    One-way by construction — `join_player` refuses once a game has
+    started, so there is no path back into this game afterwards.
+
+    Emits up to three events, because stepping out can make the current
+    round unresolvable and can leave too few players to carry on:
+    the round is voided if it was mid-collection, then the departure, then
+    a game end if fewer than two players remain.
+    """
+    _check_seq(state, expected_seq)
+    _require_in_progress(state)
+    _require_member(state, actor)
+
+    events: list[Event] = []
+    seq = expected_seq
+    ts = _now(now)
+
+    # A round waiting on card counts can't resolve without everyone who was
+    # dealt in, so put it back to the start rather than stranding the table.
+    round_ = state.current_round
+    if round_ is not None and round_.phase == RoundPhase.COLLECTING:
+        seq += 1
+        events.append(
+            _mk_event(
+                state,
+                EventType.ROUND_VOIDED,
+                actor,
+                {"round_no": round_.round_no},
+                ts,
+                seq,
+                None,
+            )
+        )
+
+    seq += 1
+    events.append(
+        _mk_event(
+            state,
+            EventType.PLAYER_STEPPED_OUT,
+            actor,
+            {"player_id": str(actor)},
+            ts,
+            seq,
+            event_id,
+        )
+    )
+
+    # Taidi needs two players. If this departure drops the table below that,
+    # the game is over — settle it now rather than leaving a room nobody can
+    # play or end.
+    if len(state.members) - 1 < 2:
+        seq += 1
+        events.append(
+            _mk_event(
+                state, EventType.GAME_ENDED, actor, {"reason": "too_few_players"}, ts, seq, None
+            )
+        )
+    return events
+
+
 def disband_room(
     state: RoomState,
     *,
@@ -233,8 +307,15 @@ def _submit_cards_events(
         raise IllegalTransition(
             f"{state.members[target].display_name} already submitted for this round."
         )
-    if cards < 0:
-        raise IllegalTransition("Cards can't be negative.")
+    # Zero is the winner's card count, and the engine identifies the winner
+    # as "the one player holding none" — so a loser submitting 0 makes the
+    # round unresolvable (rules.compute_card_transfers raises a bare
+    # ValueError, which escapes the MachineError handling as a 500). Reject
+    # it here, where it can be explained.
+    if cards < 1:
+        raise IllegalTransition(
+            "A losing hand has at least 1 card left — only the winner finishes on 0."
+        )
 
     ts = _now(now)
     payload = {"round_no": round_.round_no, "target_player": str(target), "cards": cards}
@@ -350,6 +431,56 @@ def _target_round_index_for_void(state: RoomState) -> int:
     return len(state.rounds) - 1
 
 
+def void_special_hand(
+    state: RoomState,
+    *,
+    expected_seq: int,
+    actor: UUID,
+    now: datetime | None = None,
+    event_id: UUID | None = None,
+) -> list[Event]:
+    """Take back a special hand you claimed by mistake.
+
+    A special settles the instant it's claimed and, unlike the card-based
+    part of a round, `void_last_round` deliberately leaves it alone — so
+    without this an accidental tap moves money permanently. You can only
+    undo your OWN claim, and only in the round you made it: past rounds are
+    settled history.
+
+    The reversal is built from the transfers actually recorded for the
+    claim rather than recomputed, so it puts back exactly what was taken
+    even if the rules or the table have changed since.
+    """
+    _check_seq(state, expected_seq)
+    _require_in_progress(state)
+    _require_member(state, actor)
+    round_ = state.current_round
+    if round_ is None or not round_.special_counts.get(actor):
+        raise IllegalTransition("You have no special hand to undo in this round.")
+
+    mine = [t for t in round_.transfers if t.kind == TransferKind.SPECIAL and t.to_player == actor]
+    # One claim bills every other player once, so the most recent claim is
+    # the last group of that size.
+    per_claim = max(1, len(mine) // round_.special_counts[actor])
+    to_reverse = mine[-per_claim:]
+    payload = {
+        "round_no": round_.round_no,
+        "claimer": str(actor),
+        "transfers": [t.model_dump(mode="json") for t in to_reverse],
+    }
+    return [
+        _mk_event(
+            state,
+            EventType.SPECIAL_HAND_VOIDED,
+            actor,
+            payload,
+            _now(now),
+            expected_seq + 1,
+            event_id,
+        )
+    ]
+
+
 def void_last_round(
     state: RoomState,
     *,
@@ -359,10 +490,15 @@ def void_last_round(
     event_id: UUID | None = None,
 ) -> list[Event]:
     _check_seq(state, expected_seq)
-    if actor != state.host_id:
-        raise NotAuthorized("Only the host can void a round.")
     _require_in_progress(state)
     idx = _target_round_index_for_void(state)
+    # The player who claimed the win can take it back — they're the one who
+    # knows it was a misclick. The host can too, as the backstop for when
+    # that player has stopped responding and the round would otherwise sit
+    # in `collecting` forever.
+    claimant = state.rounds[idx].winner
+    if actor != state.host_id and actor != claimant:
+        raise NotAuthorized("Only the host or the player who claimed the win can undo it.")
     payload = {"round_no": state.rounds[idx].round_no}
     return [
         _mk_event(
@@ -387,7 +523,11 @@ def end_game(
     matters once ending a game creates real debts."""
     _check_seq(state, expected_seq)
     _require_in_progress(state)
-    _require_member(state, actor)
+    # Ending the game finalises every balance and creates real debts, so it
+    # takes the host — the same bar as starting or disbanding, and what
+    # Mahjong already required.
+    if actor != state.host_id:
+        raise NotAuthorized("Only the host can end the game.")
     round_ = state.current_round
     if round_ is not None and round_.phase == RoundPhase.COLLECTING:
         raise IllegalTransition(
@@ -447,6 +587,29 @@ def apply(state: RoomState, event: Event) -> RoomState:
             new.balances[UUID(t["to_player"])] += t["amount_cents"]
             round_.transfers.append(Transfer.model_validate(t))
 
+    elif event.type == EventType.SPECIAL_HAND_VOIDED:
+        round_ = new.rounds[-1]
+        claimer = UUID(event.payload["claimer"])
+        round_.special_counts[claimer] = max(0, round_.special_counts.get(claimer, 0) - 1)
+        for t in event.payload["transfers"]:
+            new.balances[UUID(t["from_player"])] += t["amount_cents"]
+            new.balances[UUID(t["to_player"])] -= t["amount_cents"]
+        reversed_count = len(event.payload["transfers"])
+        kept = []
+        removed = 0
+        # Drop the reversed claim's transfers from the tail, leaving any
+        # earlier claims in place.
+        for t in reversed(round_.transfers):
+            if (
+                removed < reversed_count
+                and t.kind == TransferKind.SPECIAL
+                and t.to_player == claimer
+            ):
+                removed += 1
+                continue
+            kept.append(t)
+        round_.transfers = list(reversed(kept))
+
     elif event.type == EventType.ROUND_RESOLVED:
         round_ = new.rounds[-1]
         round_.phase = RoundPhase.RESOLVED
@@ -487,6 +650,18 @@ def apply(state: RoomState, event: Event) -> RoomState:
         new.ended_at = event.created_at
         if new.rounds and new.rounds[-1].is_empty:
             new.rounds.pop()
+
+    elif event.type == EventType.PLAYER_STEPPED_OUT:
+        pid = UUID(event.payload["player_id"])
+        departing = new.members[pid]
+        new.departed[pid] = departing.display_name
+        del new.members[pid]
+        # Balance deliberately survives: they played those rounds and their
+        # money still has to settle with everyone else's.
+        if new.host_id == pid and new.members:
+            # Ending the game is host-only, so the room would be unclosable
+            # if the host walked off with the title.
+            new.host_id = next(iter(sorted(new.members, key=lambda p: new.members[p].seat)))
 
     elif event.type == EventType.PLAYER_LEFT:
         pid = UUID(event.payload["player_id"])

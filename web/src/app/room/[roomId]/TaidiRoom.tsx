@@ -28,7 +28,6 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
   const [banner, setBanner] = useState<string | null>(null);
   const [cardsInput, setCardsInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [confirmClose, setConfirmClose] = useState(false);
   const [blockedBy, setBlockedBy] = useState<string | null>(null);
   const joinedRef = useRef(false);
 
@@ -118,31 +117,18 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
   }
 
   const isHost = state.host_id === me;
-  const nameOf = (id: string) => state.members[id]?.display_name ?? "?";
+  // Someone who stepped out keeps their balance and their place in the
+  // standings, so fall back to the name recorded when they left.
+  const nameOf = (id: string) =>
+    state.members[id]?.display_name ?? state.departed?.[id] ?? "?";
 
   /**
-   * Going back means leaving — a player shouldn't still hold a seat in a
-   * lobby while browsing the rest of the app (and the one-active-room rule
-   * would otherwise keep them locked out of every other room). A host can't
-   * leave, only disband, so for them back closes the room — confirmed
-   * inline first if anyone else is still in the lobby.
-   *
-   * Once the game is in progress this is a plain navigation: leaving is
-   * forbidden mid-game (there's real money on the table), so the seat and
-   * balance stay put and the player can come back to them.
+   * Back minimises rather than leaves: you stay in the room and can use the
+   * rest of the app, with home's "Rejoin Room" button as the way in again.
+   * Actually leaving is a separate, explicit choice — see the Leave control
+   * in the lobby and at the table.
    */
-  async function handleBack() {
-    if (state && state.status === "lobby" && isMember) {
-      if (isHost) {
-        if (membersBySeat.length > 1 && !confirmClose) {
-          setConfirmClose(true);
-          return;
-        }
-        if (!(await run((seq) => api.disband(roomId, seq)))) return;
-      } else if (!(await run((seq) => api.leave(roomId, seq)))) {
-        return;
-      }
-    }
+  function handleBack() {
     router.push("/");
   }
 
@@ -157,26 +143,6 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
         >
           ←
         </button>
-        {confirmClose && (
-          <>
-            <span className="text-xs text-muted">Close the room for everyone?</span>
-            <button
-              onClick={handleBack}
-              disabled={busy}
-              data-testid="confirm-close-btn"
-              className="rounded-lg bg-danger px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-            >
-              Close
-            </button>
-            <button
-              onClick={() => setConfirmClose(false)}
-              data-testid="cancel-close-btn"
-              className="rounded-lg border border-border px-3 py-2 text-xs font-semibold text-muted"
-            >
-              Cancel
-            </button>
-          </>
-        )}
       </div>
 
       {banner && (
@@ -232,20 +198,31 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
               }
             })
           }
+          isHost={isHost}
           onSpecialHand={() =>
             run((seq) => api.specialHand(roomId, seq)).then((r) => r && setData(r))
           }
+          onVoidRound={() =>
+            run((seq) => api.voidLastRound(roomId, seq)).then((r) => r && setData(r))
+          }
+          onVoidSpecial={() =>
+            run((seq) => api.voidSpecialHand(roomId, seq)).then((r) => r && setData(r))
+          }
+          onStepOut={() => run((seq) => api.stepOut(roomId, seq)).then((r) => r && router.push("/"))}
           onEndGame={() => run((seq) => api.endGame(roomId, seq)).then((r) => r && setData(r))}
         />
       )}
 
       {state.status === "ended" && (
-        <EndedView
-          standings={standings}
-          nameOf={nameOf}
-          roundsPlayed={state.rounds.length}
-          onHome={() => router.push("/")}
-        />
+        <div className="space-y-6">
+          <EndedView
+            standings={standings}
+            nameOf={nameOf}
+            roundsPlayed={state.rounds.length}
+            onHome={() => router.push("/")}
+          />
+          <RoundLog rounds={state.rounds} me={me} nameOf={nameOf} />
+        </div>
       )}
     </main>
   );
@@ -346,7 +323,7 @@ function Lobby({
               data-testid="disband-room-btn"
               className="w-full rounded-xl border border-border py-2.5 text-xs font-semibold text-muted disabled:opacity-50"
             >
-              Disband Room
+              Close Room
             </button>
           )}
         </div>
@@ -367,6 +344,75 @@ function Lobby({
   );
 }
 
+/** An openable record of what happened, round by round.
+ *
+ * Deliberately not a full breakdown: enough to answer "wait, what did I get
+ * charged for?" at the table without anyone scrolling through a ledger.
+ * Everything here is already in the folded state — no extra request. */
+function RoundLog({
+  rounds,
+  me,
+  nameOf,
+}: {
+  rounds: RoomState["rounds"];
+  me: string;
+  nameOf: (id: string) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  // Only rounds where something actually happened, newest first.
+  const played = rounds.filter((r) => r.transfers.length > 0 || r.winner).reverse();
+  if (played.length === 0) return null;
+
+  return (
+    <div className="rounded-xl border border-border bg-surface">
+      <button
+        onClick={() => setOpen(!open)}
+        data-testid="round-log-toggle"
+        className="flex w-full items-center justify-between px-4 py-2.5 text-xs font-semibold text-muted"
+      >
+        <span>Round log ({played.length})</span>
+        <span aria-hidden>{open ? "−" : "+"}</span>
+      </button>
+      {open && (
+        <div data-testid="round-log" className="space-y-3 border-t border-border px-4 py-3">
+          {played.map((r) => {
+            const net = r.transfers.reduce(
+              (a, t) => a + (t.to_player === me ? t.amount_cents : 0) - (t.from_player === me ? t.amount_cents : 0),
+              0,
+            );
+            const specials = Object.entries(r.special_counts).filter(([, n]) => n > 0);
+            return (
+              <div key={r.round_no} data-testid={`round-log-${r.round_no}`} className="space-y-1">
+                <div className="flex items-baseline justify-between">
+                  <p className="text-xs font-semibold text-foreground">
+                    Round {r.round_no}
+                    {r.winner ? ` · ${nameOf(r.winner)} won` : " · unfinished"}
+                  </p>
+                  <span className={`text-xs font-bold ${net < 0 ? "text-danger" : "text-brand-strong"}`}>
+                    {money(net)}
+                  </span>
+                </div>
+                {Object.keys(r.cards_submitted).length > 0 && (
+                  <p className="text-[11px] text-muted">
+                    {Object.entries(r.cards_submitted)
+                      .map(([pid, c]) => `${nameOf(pid)} ${c}`)
+                      .join(" · ")}
+                  </p>
+                )}
+                {specials.length > 0 && (
+                  <p className="text-[11px] text-muted">
+                    Special: {specials.map(([pid, n]) => `${nameOf(pid)}${n > 1 ? ` x${n}` : ""}`).join(", ")}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TableView({
   state,
   me,
@@ -379,7 +425,11 @@ function TableView({
   onClaimWin,
   onSubmitCards,
   onSpecialHand,
+  onVoidRound,
+  onVoidSpecial,
+  onStepOut,
   onEndGame,
+  isHost,
 }: {
   state: RoomState;
   me: string;
@@ -392,8 +442,17 @@ function TableView({
   onClaimWin: () => void;
   onSubmitCards: (cards: number) => void;
   onSpecialHand: () => void;
+  onVoidRound: () => void;
+  onVoidSpecial: () => void;
+  onStepOut: () => void;
   onEndGame: () => void;
+  isHost: boolean;
 }) {
+  const [confirmSpecial, setConfirmSpecial] = useState(false);
+  const [confirmVoid, setConfirmVoid] = useState(false);
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const mySpecials = currentRound.special_counts[me] ?? 0;
   const isPlaying = currentRound.phase === "playing";
   const isCollecting = currentRound.phase === "collecting";
   const iAmWinner = currentRound.winner === me;
@@ -437,16 +496,46 @@ function TableView({
           >
             Win
           </button>
-          {state.rules?.special_hands_enabled && (
-            <button
-              onClick={onSpecialHand}
-              disabled={busy}
-              data-testid="special-hand-btn"
-              className="w-full rounded-xl border border-border py-3 text-sm font-semibold text-brand disabled:opacity-50"
-            >
-              Special Hand
-            </button>
-          )}
+          {state.rules?.special_hands_enabled &&
+            (confirmSpecial ? (
+              // A special settles instantly and charges everyone else, so a
+              // stray tap costs real money — make it deliberate.
+              <div className="space-y-2 rounded-xl border border-brand-strong bg-[#FFF8E1] px-3 py-2.5">
+                <p className="text-center text-xs text-brand">
+                  Charge everyone else for a special hand?
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setConfirmSpecial(false);
+                      onSpecialHand();
+                    }}
+                    disabled={busy}
+                    data-testid="confirm-special-btn"
+                    className="flex-1 rounded-xl bg-brand py-2.5 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    Claim it
+                  </button>
+                  <button
+                    onClick={() => setConfirmSpecial(false)}
+                    data-testid="cancel-special-btn"
+                    className="flex-1 rounded-xl border border-border py-2.5 text-xs font-semibold text-muted"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmSpecial(true)}
+                disabled={busy}
+                data-testid="special-hand-btn"
+                className="w-full rounded-xl border border-border py-3 text-sm font-semibold text-brand disabled:opacity-50"
+              >
+                Special Hand
+              </button>
+            ))}
+
         </div>
       )}
 
@@ -461,7 +550,9 @@ function TableView({
           onSubmit={(e) => {
             e.preventDefault();
             const n = Number(cardsInput);
-            if (Number.isInteger(n) && n >= 0) onSubmitCards(n);
+            // 0 is the winner's count — the engine rejects it, so don't
+            // let the form send it in the first place.
+            if (Number.isInteger(n) && n >= 1) onSubmitCards(n);
           }}
           className="space-y-3"
         >
@@ -471,7 +562,7 @@ function TableView({
           <input
             type="number"
             inputMode="numeric"
-            min={0}
+            min={1}
             data-testid="cards-input"
             className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-center text-lg outline-none focus:border-brand-strong"
             value={cardsInput}
@@ -480,7 +571,7 @@ function TableView({
           />
           <button
             type="submit"
-            disabled={busy || cardsInput.trim() === ""}
+            disabled={busy || cardsInput.trim() === "" || Number(cardsInput) < 1}
             data-testid="submit-cards-btn"
             className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
           >
@@ -495,14 +586,160 @@ function TableView({
         </p>
       )}
 
-      <button
-        onClick={onEndGame}
-        disabled={busy}
-        data-testid="end-game-btn"
-        className="w-full rounded-xl border border-border py-2.5 text-xs font-semibold text-muted disabled:opacity-50"
-      >
-        End Game
-      </button>
+      <RoundLog rounds={state.rounds} me={me} nameOf={nameOf} />
+
+      {/* Everything below here either reverses something or ends the
+          night. Grouped, small and confirm-gated, kept well away from Win
+          and Special — the buttons people reach for mid-hand. */}
+      {(mySpecials > 0 || (isCollecting && (isHost || iAmWinner))) && (
+        <div className="space-y-2 rounded-xl border border-border bg-surface px-3 py-2.5">
+          <p className="text-[10px] uppercase tracking-wider text-muted">Fix a mistake</p>
+
+        {/* Voiding a round deliberately leaves specials alone, so this is
+            the only way back from a mistaken claim. */}
+        {mySpecials > 0 && (
+          <button
+            onClick={onVoidSpecial}
+            disabled={busy}
+            data-testid="undo-special-btn"
+            className="w-full rounded-lg border border-border py-2 text-xs font-semibold text-muted disabled:opacity-50"
+          >
+            Undo my special hand{mySpecials > 1 ? ` (${mySpecials})` : ""}
+          </button>
+        )}
+
+        {/* The claimer can take back their own misclick; the host can too,
+            as the backstop for when that player has gone quiet and the
+            round would otherwise sit in `collecting` forever. */}
+        {isCollecting &&
+          (isHost || iAmWinner) &&
+          (confirmVoid ? (
+            <div className="space-y-2">
+              <p className="text-center text-xs text-muted">
+                Restart this round? Card counts so far are discarded.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setConfirmVoid(false);
+                    onVoidRound();
+                  }}
+                  disabled={busy}
+                  data-testid="confirm-void-btn"
+                  className="flex-1 rounded-lg bg-danger py-2 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  Restart round
+                </button>
+                <button
+                  onClick={() => setConfirmVoid(false)}
+                  data-testid="cancel-void-btn"
+                  className="flex-1 rounded-lg border border-border py-2 text-xs font-semibold text-muted"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmVoid(true)}
+              disabled={busy}
+              data-testid="void-round-btn"
+              className="w-full rounded-lg border border-border py-2 text-xs font-semibold text-muted disabled:opacity-50"
+            >
+              Undo win claim
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Ending settles every balance and creates debts in the Debts tab,
+          so it asks first and only the host sees it. Not filed under "fix a
+          mistake" — it isn't one. */}
+      <div className="rounded-xl border border-border bg-surface px-3 py-2.5">
+        {isHost &&
+          (confirmEnd ? (
+            <div className="space-y-2">
+              <p className="text-center text-xs text-muted">
+                End the game and settle up? This can&apos;t be undone.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setConfirmEnd(false);
+                    onEndGame();
+                  }}
+                  disabled={busy}
+                  data-testid="confirm-end-btn"
+                  className="flex-1 rounded-lg bg-danger py-2 text-xs font-semibold text-white disabled:opacity-50"
+                >
+                  End &amp; settle
+                </button>
+                <button
+                  onClick={() => setConfirmEnd(false)}
+                  data-testid="cancel-end-btn"
+                  className="flex-1 rounded-lg border border-border py-2 text-xs font-semibold text-muted"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmEnd(true)}
+              disabled={busy}
+              data-testid="end-game-btn"
+              className="w-full rounded-lg border border-border py-2 text-xs font-semibold text-muted disabled:opacity-50"
+            >
+              End Game
+            </button>
+          ))}
+        {!isHost && (
+          <p className="text-center text-[11px] text-muted">
+            Only {nameOf(state.host_id)} can end the game.
+          </p>
+        )}
+
+        {/* Leaving for good, as opposed to the back arrow, which just
+            minimises. One-way: the engine refuses mid-game joins, so the
+            confirm has to say so plainly. */}
+        {confirmLeave ? (
+          <div className="mt-2 space-y-2">
+            <p className="text-center text-xs text-muted">
+              Leave for good? You keep what you&apos;re up or down and settle with everyone,
+              but you can&apos;t rejoin this game.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setConfirmLeave(false);
+                  onStepOut();
+                }}
+                disabled={busy}
+                data-testid="confirm-leave-btn"
+                className="flex-1 rounded-lg bg-danger py-2 text-xs font-semibold text-white disabled:opacity-50"
+              >
+                Leave game
+              </button>
+              <button
+                onClick={() => setConfirmLeave(false)}
+                data-testid="cancel-leave-btn"
+                className="flex-1 rounded-lg border border-border py-2 text-xs font-semibold text-muted"
+              >
+                Stay
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirmLeave(true)}
+            disabled={busy}
+            data-testid="leave-game-btn"
+            className="mt-2 w-full rounded-lg border border-border py-2 text-xs font-semibold text-muted disabled:opacity-50"
+          >
+            Leave game
+          </button>
+        )}
+      </div>
     </div>
   );
 }

@@ -284,13 +284,19 @@ async def test_player_ended_game_records_who_ended_it(make_device):
     r = await bob.post(f"/rooms/{room_id}/join")
     state = r.json()
     r = await alice.post(f"/rooms/{room_id}/start", json={"expected_seq": state["seq"]})
-    # Taidi lets any member end the game — here Bob does, not the host.
-    r = await bob.post(f"/rooms/{room_id}/end", json={"expected_seq": r.json()["seq"]})
+    # Ending settles every balance and creates debts, so it's the host's
+    # call alone — a guest tapping it gets nowhere.
+    assert (
+        await bob.post(f"/rooms/{room_id}/end", json={"expected_seq": r.json()["seq"]})
+    ).status_code == 403
+    r = await alice.post(f"/rooms/{room_id}/end", json={"expected_seq": r.json()["seq"]})
     assert r.status_code == 200, r.text
 
+    # So `ended_by` always names the host now; its job is distinguishing a
+    # person ending the game from the inactivity backstop doing it.
     g = (await alice.get("/history/me")).json()["games"][0]
     assert g["auto_ended"] is False
-    assert g["ended_by"] == "Bob"
+    assert g["ended_by"] == "Alice"
 
 
 async def test_fresh_in_progress_game_is_not_closed(make_device):
