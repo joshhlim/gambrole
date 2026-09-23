@@ -178,7 +178,6 @@ export default function TopBar() {
     const onScroll = () => setScrolled(window.scrollY > 4);
     // Read once per page too: arriving at a restored scroll position
     // fires no event, and landing at the top has to clear the last page's.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);

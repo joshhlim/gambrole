@@ -8,6 +8,7 @@ import { debtsApi } from "@/lib/debtsApi";
 import type { DebtView } from "@/lib/debtsTypes";
 import { usePolling } from "@/lib/usePolling";
 import TabTransition from "@/components/TabTransition";
+import TabBar from "@/components/TabBar";
 
 const TABS = ["owing", "owed"] as const;
 type Tab = (typeof TABS)[number];
@@ -24,7 +25,10 @@ function capitalize(s: string): string {
 }
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(iso).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function OwingRow({
@@ -55,7 +59,9 @@ function OwingRow({
                 : ""}
           </p>
         </div>
-        <p className="text-lg font-bold tabular text-danger">{dollars(debt.amount_cents)}</p>
+        <p className="text-lg font-bold tabular text-danger">
+          {dollars(debt.amount_cents)}
+        </p>
       </div>
       <div className="mt-2">
         {debt.status === "pending" && (
@@ -70,9 +76,13 @@ function OwingRow({
           </button>
         )}
         {debt.status === "marked_paid" && (
-          <p className="text-xs text-muted">Waiting for {debt.counterparty_display_name} to approve.</p>
+          <p className="text-xs text-muted">
+            Waiting for {debt.counterparty_display_name} to approve.
+          </p>
         )}
-        {debt.status === "approved" && <p className="text-xs text-muted">Settled</p>}
+        {debt.status === "approved" && (
+          <p className="text-xs text-muted">Settled</p>
+        )}
       </div>
     </div>
   );
@@ -94,7 +104,9 @@ function OwedRow({
     <div
       data-testid={`debt-owed-${debt.settlement_id}`}
       className={`rounded-xl border px-4 py-3 ${
-        needsApproval ? "border-brand-strong bg-[#FFF8E1]" : "border-border bg-surface"
+        needsApproval
+          ? "border-brand-strong bg-[#FFF8E1]"
+          : "border-border bg-surface"
       }`}
     >
       <div className="flex items-center justify-between">
@@ -111,10 +123,14 @@ function OwedRow({
                 : ""}
           </p>
         </div>
-        <p className="text-lg font-bold tabular text-brand-strong">{dollars(debt.amount_cents)}</p>
+        <p className="text-lg font-bold tabular text-brand-strong">
+          {dollars(debt.amount_cents)}
+        </p>
       </div>
       <div className="mt-2">
-        {debt.status === "pending" && <p className="text-xs text-muted">Not yet marked paid.</p>}
+        {debt.status === "pending" && (
+          <p className="text-xs text-muted">Not yet marked paid.</p>
+        )}
         {needsApproval && (
           <div className="flex gap-2">
             <button
@@ -137,7 +153,9 @@ function OwedRow({
             </button>
           </div>
         )}
-        {debt.status === "approved" && <p className="text-xs text-muted">Settled</p>}
+        {debt.status === "approved" && (
+          <p className="text-xs text-muted">Settled</p>
+        )}
       </div>
     </div>
   );
@@ -149,7 +167,9 @@ export default function DebtsPage() {
   const [tab, setTab] = useState<Tab>("owing");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const { data, error, setData } = usePolling(() => debtsApi.getMine(), 10000, [user]);
+  const { data, error, setData } = usePolling(() => debtsApi.getMine(), 10000, [
+    user,
+  ]);
 
   useEffect(() => {
     if (checked && !user) router.replace("/");
@@ -159,7 +179,9 @@ export default function DebtsPage() {
 
   async function runAction(
     settlementId: string,
-    fn: (id: string) => Promise<{ settlement_id: string; status: string; updated_at: string }>,
+    fn: (
+      id: string,
+    ) => Promise<{ settlement_id: string; status: string; updated_at: string }>,
     tabKey: Tab,
   ) {
     setBusyId(settlementId);
@@ -172,19 +194,26 @@ export default function DebtsPage() {
           ...prev,
           [tabKey]: prev[tabKey].map((d) =>
             d.settlement_id === settlementId
-              ? { ...d, status: result.status as DebtView["status"], updated_at: result.updated_at }
+              ? {
+                  ...d,
+                  status: result.status as DebtView["status"],
+                  updated_at: result.updated_at,
+                }
               : d,
           ),
         };
       });
     } catch (e) {
-      setActionError(e instanceof ApiError ? e.message : "That action didn't go through.");
+      setActionError(
+        e instanceof ApiError ? e.message : "That action didn't go through.",
+      );
     } finally {
       setBusyId(null);
     }
   }
 
-  const needsApprovalCount = data?.owed.filter((d) => d.status === "marked_paid").length ?? 0;
+  const needsApprovalCount =
+    data?.owed.filter((d) => d.status === "marked_paid").length ?? 0;
 
   return (
     <main className="flex-1 px-5 py-8 max-w-md mx-auto w-full">
@@ -200,7 +229,10 @@ export default function DebtsPage() {
       </div>
 
       {(error || actionError) && (
-        <p data-testid="debts-error" className="text-sm text-center text-danger mb-4">
+        <p
+          data-testid="debts-error"
+          className="text-sm text-center text-danger mb-4"
+        >
           {actionError ?? "Couldn't load debts."}
         </p>
       )}
@@ -209,37 +241,24 @@ export default function DebtsPage() {
         <p className="text-center text-sm text-muted">Loading…</p>
       ) : (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => setTab("owing")}
-              data-testid="debts-tab-owing"
-              className={`rounded-xl border px-2 py-2 text-xs font-semibold ${
-                tab === "owing"
-                  ? "border-brand-strong bg-[#FFF8E1] text-brand"
-                  : "border-border bg-surface text-muted"
-              }`}
-            >
-              You Owe
-            </button>
-            <button
-              type="button"
-              onClick={() => setTab("owed")}
-              data-testid="debts-tab-owed"
-              className={`rounded-xl border px-2 py-2 text-xs font-semibold ${
-                tab === "owed"
-                  ? "border-brand-strong bg-[#FFF8E1] text-brand"
-                  : "border-border bg-surface text-muted"
-              }`}
-            >
-              Owed To You{needsApprovalCount > 0 ? ` (${needsApprovalCount})` : ""}
-            </button>
-          </div>
+          <TabBar
+            tabs={TABS}
+            active={tab}
+            onSelect={setTab}
+            testIdPrefix="debts-tab"
+            label={(x) =>
+              x === "owing"
+                ? "You Owe"
+                : `Owed To You${needsApprovalCount > 0 ? ` (${needsApprovalCount})` : ""}`
+            }
+          />
 
           <TabTransition tabKey={tab} order={TABS}>
             {tab === "owing" &&
               (data.owing.length === 0 ? (
-                <p className="text-center text-sm text-muted py-8">You don&apos;t owe anyone.</p>
+                <p className="text-center text-sm text-muted py-8">
+                  You don&apos;t owe anyone.
+                </p>
               ) : (
                 <div className="space-y-3">
                   {data.owing.map((debt) => (
@@ -247,7 +266,9 @@ export default function DebtsPage() {
                       key={debt.settlement_id}
                       debt={debt}
                       busy={busyId === debt.settlement_id}
-                      onMarkPaid={(id) => runAction(id, debtsApi.markPaid, "owing")}
+                      onMarkPaid={(id) =>
+                        runAction(id, debtsApi.markPaid, "owing")
+                      }
                     />
                   ))}
                 </div>
@@ -255,7 +276,9 @@ export default function DebtsPage() {
 
             {tab === "owed" &&
               (data.owed.length === 0 ? (
-                <p className="text-center text-sm text-muted py-8">No one owes you anything.</p>
+                <p className="text-center text-sm text-muted py-8">
+                  No one owes you anything.
+                </p>
               ) : (
                 <div className="space-y-3">
                   {data.owed.map((debt) => (
@@ -263,7 +286,9 @@ export default function DebtsPage() {
                       key={debt.settlement_id}
                       debt={debt}
                       busy={busyId === debt.settlement_id}
-                      onApprove={(id) => runAction(id, debtsApi.approve, "owed")}
+                      onApprove={(id) =>
+                        runAction(id, debtsApi.approve, "owed")
+                      }
                       onReject={(id) => runAction(id, debtsApi.reject, "owed")}
                     />
                   ))}

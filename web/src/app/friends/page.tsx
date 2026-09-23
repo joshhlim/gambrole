@@ -5,8 +5,13 @@ import { useRouter } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
 import { friendsApi } from "@/lib/friendsApi";
-import type { FriendsResponse, MyProfile, UserProfile } from "@/lib/friendsTypes";
+import type {
+  FriendsResponse,
+  MyProfile,
+  UserProfile,
+} from "@/lib/friendsTypes";
 import TabTransition from "@/components/TabTransition";
+import TabBar from "@/components/TabBar";
 
 const TABS = ["friends", "requests", "add"] as const;
 type Tab = (typeof TABS)[number];
@@ -32,8 +37,12 @@ function PersonRow({
       className="flex items-center gap-3 rounded-xl border border-border bg-surface px-3 py-2.5"
     >
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-foreground">{user.display_name}</p>
-        <p className="truncate text-xs text-muted">{sub ?? handle(user) ?? "no username yet"}</p>
+        <p className="truncate text-sm font-semibold text-foreground">
+          {user.display_name}
+        </p>
+        <p className="truncate text-xs text-muted">
+          {sub ?? handle(user) ?? "no username yet"}
+        </p>
       </div>
       <div className="flex shrink-0 gap-1.5">{children}</div>
     </div>
@@ -63,7 +72,10 @@ export default function FriendsPage() {
   }, [checked, user, router]);
 
   const refresh = useCallback(async () => {
-    const [list, sugg] = await Promise.all([friendsApi.list(), friendsApi.suggestions()]);
+    const [list, sugg] = await Promise.all([
+      friendsApi.list(),
+      friendsApi.suggestions(),
+    ]);
     setData(list);
     setSuggestions(sugg.results);
   }, []);
@@ -80,7 +92,9 @@ export default function FriendsPage() {
       })
       .catch((e) => {
         if (!cancelled) {
-          setError(e instanceof ApiError ? e.message : "Couldn't load your friends.");
+          setError(
+            e instanceof ApiError ? e.message : "Couldn't load your friends.",
+          );
         }
       });
     return () => {
@@ -138,12 +152,18 @@ export default function FriendsPage() {
       </div>
 
       {error && (
-        <p data-testid="friends-error" className="mb-3 text-center text-sm text-danger">
+        <p
+          data-testid="friends-error"
+          className="mb-3 text-center text-sm text-danger"
+        >
           {error}
         </p>
       )}
       {note && (
-        <p data-testid="friends-note" className="mb-3 text-center text-sm text-brand-strong">
+        <p
+          data-testid="friends-note"
+          className="mb-3 text-center text-sm text-brand-strong"
+        >
           {note}
         </p>
       )}
@@ -153,8 +173,13 @@ export default function FriendsPage() {
       {profile?.username && (
         <div className="mb-4 flex items-center justify-between rounded-xl border border-border bg-surface px-3 py-2.5">
           <div>
-            <p className="text-[10px] uppercase tracking-wider text-muted">Friends find you as</p>
-            <p data-testid="my-username" className="text-sm font-semibold text-brand">
+            <p className="text-[10px] uppercase tracking-wider text-muted">
+              Friends find you as
+            </p>
+            <p
+              data-testid="my-username"
+              className="text-sm font-semibold text-brand"
+            >
               @{profile.username}
             </p>
           </div>
@@ -169,39 +194,41 @@ export default function FriendsPage() {
         </div>
       )}
 
-      <div className="mb-4 grid grid-cols-3 gap-2">
-        {TABS.map((x) => (
-          <button
-            key={x}
-            type="button"
-            onClick={() => setTab(x)}
-            data-testid={`friends-tab-${x}`}
-            className={`rounded-xl border px-2 py-2 text-xs font-semibold capitalize ${
-              tab === x
-                ? "border-brand-strong bg-[#FFF8E1] text-brand"
-                : "border-border bg-surface text-muted"
-            }`}
-          >
-            {x === "requests" && incoming > 0 ? `Requests (${incoming})` : x}
-          </button>
-        ))}
-      </div>
+      <TabBar
+        tabs={TABS}
+        active={tab}
+        onSelect={setTab}
+        testIdPrefix="friends-tab"
+        label={(x) =>
+          x === "requests" && incoming > 0 ? `Requests (${incoming})` : x
+        }
+        className="mb-4"
+      />
 
       <TabTransition tabKey={tab} order={TABS}>
         {!data ? (
           <p className="text-center text-sm text-muted">Loading…</p>
         ) : tab === "friends" ? (
           data.friends.length === 0 ? (
-            <p data-testid="friends-empty" className="py-8 text-center text-sm text-muted">
+            <p
+              data-testid="friends-empty"
+              className="py-8 text-center text-sm text-muted"
+            >
               No friends yet — add someone from the Add tab.
             </p>
           ) : (
             <div className="space-y-2">
               {data.friends.map((e) => (
-                <PersonRow key={e.id} user={e.user} testId={`friend-${e.user.user_id}`}>
+                <PersonRow
+                  key={e.id}
+                  user={e.user}
+                  testId={`friend-${e.user.user_id}`}
+                >
                   <button
                     type="button"
-                    onClick={() => router.push(`/stats?player=${e.user.user_id}`)}
+                    onClick={() =>
+                      router.push(`/stats?player=${e.user.user_id}`)
+                    }
                     data-testid={`friend-stats-${e.user.user_id}`}
                     className={btnGhost}
                   >
@@ -211,7 +238,11 @@ export default function FriendsPage() {
                     type="button"
                     disabled={busy === e.user.user_id}
                     onClick={() =>
-                      act(e.user.user_id, () => friendsApi.remove(e.user.user_id), "Removed.")
+                      act(
+                        e.user.user_id,
+                        () => friendsApi.remove(e.user.user_id),
+                        "Removed.",
+                      )
                     }
                     data-testid={`friend-remove-${e.user.user_id}`}
                     className={btnGhost}
@@ -225,16 +256,28 @@ export default function FriendsPage() {
         ) : tab === "requests" ? (
           <div className="space-y-4">
             <section className="space-y-2">
-              <p className="text-[10px] uppercase tracking-wider text-muted">Received</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted">
+                Received
+              </p>
               {data.incoming.length === 0 ? (
                 <p className="text-sm text-muted">Nothing waiting on you.</p>
               ) : (
                 data.incoming.map((e) => (
-                  <PersonRow key={e.id} user={e.user} testId={`incoming-${e.id}`}>
+                  <PersonRow
+                    key={e.id}
+                    user={e.user}
+                    testId={`incoming-${e.id}`}
+                  >
                     <button
                       type="button"
                       disabled={busy === e.id}
-                      onClick={() => act(e.id, () => friendsApi.accept(e.id), "Friend added.")}
+                      onClick={() =>
+                        act(
+                          e.id,
+                          () => friendsApi.accept(e.id),
+                          "Friend added.",
+                        )
+                      }
                       data-testid={`accept-${e.id}`}
                       className={btnPrimary}
                     >
@@ -254,12 +297,19 @@ export default function FriendsPage() {
               )}
             </section>
             <section className="space-y-2">
-              <p className="text-[10px] uppercase tracking-wider text-muted">Sent</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted">
+                Sent
+              </p>
               {data.outgoing.length === 0 ? (
                 <p className="text-sm text-muted">None outstanding.</p>
               ) : (
                 data.outgoing.map((e) => (
-                  <PersonRow key={e.id} user={e.user} sub="Waiting for them" testId={`outgoing-${e.id}`}>
+                  <PersonRow
+                    key={e.id}
+                    user={e.user}
+                    sub="Waiting for them"
+                    testId={`outgoing-${e.id}`}
+                  >
                     <button
                       type="button"
                       disabled={busy === e.id}
@@ -301,19 +351,30 @@ export default function FriendsPage() {
 
             {results !== null && (
               <section className="space-y-2">
-                <p className="text-[10px] uppercase tracking-wider text-muted">Results</p>
+                <p className="text-[10px] uppercase tracking-wider text-muted">
+                  Results
+                </p>
                 {results.length === 0 ? (
                   <p data-testid="search-empty" className="text-sm text-muted">
-                    Nobody found. Check the spelling, or add them from a game below.
+                    Nobody found. Check the spelling, or add them from a game
+                    below.
                   </p>
                 ) : (
                   results.map((u) => (
-                    <PersonRow key={u.user_id} user={u} testId={`result-${u.user_id}`}>
+                    <PersonRow
+                      key={u.user_id}
+                      user={u}
+                      testId={`result-${u.user_id}`}
+                    >
                       <button
                         type="button"
                         disabled={busy === u.user_id}
                         onClick={() =>
-                          act(u.user_id, () => friendsApi.sendRequest(u.user_id), "Request sent.")
+                          act(
+                            u.user_id,
+                            () => friendsApi.sendRequest(u.user_id),
+                            "Request sent.",
+                          )
                         }
                         data-testid={`add-${u.user_id}`}
                         className={btnPrimary}
@@ -327,19 +388,33 @@ export default function FriendsPage() {
             )}
 
             <section className="space-y-2">
-              <p className="text-[10px] uppercase tracking-wider text-muted">Played with</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted">
+                Played with
+              </p>
               {suggestions.length === 0 ? (
-                <p data-testid="suggestions-empty" className="text-sm text-muted">
-                  Nobody new — everyone you&apos;ve played with is already connected.
+                <p
+                  data-testid="suggestions-empty"
+                  className="text-sm text-muted"
+                >
+                  Nobody new — everyone you&apos;ve played with is already
+                  connected.
                 </p>
               ) : (
                 suggestions.map((u) => (
-                  <PersonRow key={u.user_id} user={u} testId={`suggestion-${u.user_id}`}>
+                  <PersonRow
+                    key={u.user_id}
+                    user={u}
+                    testId={`suggestion-${u.user_id}`}
+                  >
                     <button
                       type="button"
                       disabled={busy === u.user_id}
                       onClick={() =>
-                        act(u.user_id, () => friendsApi.sendRequest(u.user_id), "Request sent.")
+                        act(
+                          u.user_id,
+                          () => friendsApi.sendRequest(u.user_id),
+                          "Request sent.",
+                        )
                       }
                       data-testid={`add-${u.user_id}`}
                       className={btnPrimary}

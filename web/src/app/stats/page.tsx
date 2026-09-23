@@ -24,6 +24,7 @@ import OpponentBars from "@/components/charts/OpponentBars";
 import SplitDonut from "@/components/charts/SplitDonut";
 import ResultScatter from "@/components/charts/ResultScatter";
 import TabTransition from "@/components/TabTransition";
+import TabBar from "@/components/TabBar";
 
 const TABS = ["overview", "taidi", "mahjong"] as const;
 type Tab = (typeof TABS)[number];
@@ -50,10 +51,16 @@ function Tile({
   testId?: string;
 }) {
   const toneClass =
-    tone === "pos" ? "text-brand-strong" : tone === "neg" ? "text-danger" : "text-foreground";
+    tone === "pos"
+      ? "text-brand-strong"
+      : tone === "neg"
+        ? "text-danger"
+        : "text-foreground";
   return (
     <div className="rounded-xl border border-border bg-surface px-3 py-2.5">
-      <p className="mb-0.5 text-[10px] uppercase tracking-wider text-muted">{label}</p>
+      <p className="mb-0.5 text-[10px] uppercase tracking-wider text-muted">
+        {label}
+      </p>
       <p data-testid={testId} className={`text-lg font-bold ${toneClass}`}>
         {value}
       </p>
@@ -88,12 +95,16 @@ function FilterBar({
 }) {
   const chip = (on: boolean) =>
     `rounded-lg border px-2 py-1 text-[11px] font-semibold ${
-      on ? "border-brand-strong bg-[#FFF8E1] text-brand" : "border-border bg-surface text-muted"
+      on
+        ? "border-brand-strong bg-[#FFF8E1] text-brand"
+        : "border-border bg-surface text-muted"
     }`;
   return (
     <div className="space-y-2 rounded-xl border border-border bg-surface px-3 py-2.5">
       <div className="flex items-center justify-between">
-        <p className="text-[10px] uppercase tracking-wider text-muted">Filter</p>
+        <p className="text-[10px] uppercase tracking-wider text-muted">
+          Filter
+        </p>
         <div className="flex items-center gap-2">
           <span data-testid="filter-count" className="text-[10px] text-muted">
             {shown} of {total} sessions
@@ -169,7 +180,9 @@ function OverviewTab({
   return (
     <div className="space-y-4">
       <div className="text-center">
-        <p className="mb-1 text-[10px] uppercase tracking-widest text-muted">Overall</p>
+        <p className="mb-1 text-[10px] uppercase tracking-widest text-muted">
+          Overall
+        </p>
         <p
           data-testid="overview-total"
           className={`text-4xl font-extrabold ${
@@ -181,11 +194,17 @@ function OverviewTab({
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <Tile label="Sessions played" value={String(t.sessions)} testId="overview-sessions" />
+        <Tile
+          label="Sessions played"
+          value={String(t.sessions)}
+          testId="overview-sessions"
+        />
         <Tile
           label="Most played with"
           value={mostPlayedWith?.opponent.display_name ?? "—"}
-          sub={mostPlayedWith ? `${mostPlayedWith.sessions} sessions` : undefined}
+          sub={
+            mostPlayedWith ? `${mostPlayedWith.sessions} sessions` : undefined
+          }
           testId="overview-most-played-with"
         />
         <Tile
@@ -236,13 +255,19 @@ function OverviewTab({
 
 function TaidiTab({ sessions, t }: { sessions: SessionFact[]; t: Totals }) {
   if (t.byGame.taidi.sessions === 0) {
-    return <p className="py-8 text-center text-sm text-muted">No Taidi sessions in this range.</p>;
+    return (
+      <p className="py-8 text-center text-sm text-muted">
+        No Taidi sessions in this range.
+      </p>
+    );
   }
   const normalRounds = t.payerRounds - t.doubleRounds - t.tripleRounds;
   return (
     <div className="space-y-4">
       <div className="text-center">
-        <p className="mb-1 text-[10px] uppercase tracking-widest text-muted">Taidi profit</p>
+        <p className="mb-1 text-[10px] uppercase tracking-widest text-muted">
+          Taidi profit
+        </p>
         <p
           data-testid="taidi-total"
           className={`text-3xl font-extrabold ${
@@ -312,13 +337,17 @@ function TaidiTab({ sessions, t }: { sessions: SessionFact[]; t: Totals }) {
 function MahjongTab({ sessions, t }: { sessions: SessionFact[]; t: Totals }) {
   if (t.byGame.mahjong.sessions === 0) {
     return (
-      <p className="py-8 text-center text-sm text-muted">No Mahjong sessions in this range.</p>
+      <p className="py-8 text-center text-sm text-muted">
+        No Mahjong sessions in this range.
+      </p>
     );
   }
   return (
     <div className="space-y-4">
       <div className="text-center">
-        <p className="mb-1 text-[10px] uppercase tracking-widest text-muted">Mahjong profit</p>
+        <p className="mb-1 text-[10px] uppercase tracking-widest text-muted">
+          Mahjong profit
+        </p>
         <p
           data-testid="mahjong-total"
           className={`text-3xl font-extrabold ${
@@ -330,7 +359,10 @@ function MahjongTab({ sessions, t }: { sessions: SessionFact[]; t: Totals }) {
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <Tile label="Sessions played" value={String(t.byGame.mahjong.sessions)} />
+        <Tile
+          label="Sessions played"
+          value={String(t.byGame.mahjong.sessions)}
+        />
         <Tile
           label="Hand win rate"
           value={pct(rate(t.handsWon, t.handsPlayed))}
@@ -437,14 +469,17 @@ function StatsView() {
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
-    request<StatsFactsResponse>(viewing ? `/stats/facts/${viewing}` : "/stats/facts")
+    request<StatsFactsResponse>(
+      viewing ? `/stats/facts/${viewing}` : "/stats/facts",
+    )
       .then((r) => {
         if (cancelled) return;
         setAll(r.sessions);
         setWhose(viewing ? (r.player?.display_name ?? "Your friend") : null);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof ApiError ? e.message : "Couldn't load stats.");
+        if (!cancelled)
+          setError(e instanceof ApiError ? e.message : "Couldn't load stats.");
       });
     return () => {
       cancelled = true;
@@ -455,7 +490,8 @@ function StatsView() {
   // instead of costing a round trip.
   const scoped = useMemo(() => {
     if (!all) return [];
-    const byTab = tab === "overview" ? all : all.filter((s) => s.game_type === tab);
+    const byTab =
+      tab === "overview" ? all : all.filter((s) => s.game_type === tab);
     return applyFilters(byTab, filters);
   }, [all, filters, tab]);
   const t = useMemo(() => totals(scoped), [scoped]);
@@ -478,7 +514,10 @@ function StatsView() {
       </div>
 
       {error && (
-        <p data-testid="stats-error" className="mb-4 text-center text-sm text-danger">
+        <p
+          data-testid="stats-error"
+          className="mb-4 text-center text-sm text-danger"
+        >
           {error}
         </p>
       )}
@@ -486,39 +525,38 @@ function StatsView() {
       {!all ? (
         <p className="text-center text-sm text-muted">Loading…</p>
       ) : all.length === 0 ? (
-        <p data-testid="stats-empty" className="py-8 text-center text-sm text-muted">
+        <p
+          data-testid="stats-empty"
+          className="py-8 text-center text-sm text-muted"
+        >
           No finished games yet — play a room to see your stats here.
         </p>
       ) : (
         <div className="space-y-4">
-          <div className="grid grid-cols-3 gap-2">
-            {TABS.map((x) => (
-              <button
-                key={x}
-                type="button"
-                onClick={() => setTab(x)}
-                data-testid={`stats-tab-${x}`}
-                className={`rounded-xl border px-2 py-2 text-xs font-semibold capitalize ${
-                  tab === x
-                    ? "border-brand-strong bg-[#FFF8E1] text-brand"
-                    : "border-border bg-surface text-muted"
-                }`}
-              >
-                {x}
-              </button>
-            ))}
-          </div>
+          <TabBar
+            tabs={TABS}
+            active={tab}
+            onSelect={setTab}
+            testIdPrefix="stats-tab"
+          />
 
           <FilterBar
             filters={filters}
             setFilters={setFilters}
             shown={scoped.length}
-            total={tab === "overview" ? all.length : all.filter((s) => s.game_type === tab).length}
+            total={
+              tab === "overview"
+                ? all.length
+                : all.filter((s) => s.game_type === tab).length
+            }
           />
 
           <TabTransition tabKey={tab} order={TABS}>
             {scoped.length === 0 ? (
-              <p data-testid="stats-no-match" className="py-8 text-center text-sm text-muted">
+              <p
+                data-testid="stats-no-match"
+                className="py-8 text-center text-sm text-muted"
+              >
                 No sessions match these filters.
               </p>
             ) : tab === "overview" ? (
@@ -527,7 +565,11 @@ function StatsView() {
                 t={t}
                 filters={filters}
                 setFilters={setFilters}
-                onSelectRoom={viewing ? undefined : (roomId) => router.push(`/room/${roomId}`)}
+                onSelectRoom={
+                  viewing
+                    ? undefined
+                    : (roomId) => router.push(`/room/${roomId}`)
+                }
               />
             ) : tab === "taidi" ? (
               <TaidiTab sessions={scoped} t={t} />
