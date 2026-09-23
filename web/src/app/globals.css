@@ -86,12 +86,19 @@ h2,
   }
 }
 
+/* One knob for every slide in the app — pages and in-page tabs move at the
+   same speed, because they're the same gesture to the person doing it. */
+:root {
+  --slide-duration: 340ms;
+  --slide-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 .route-forward {
-  animation: slide-from-right 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: slide-from-right var(--slide-duration) var(--slide-ease) both;
 }
 
 .route-back {
-  animation: slide-from-left 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: slide-from-left var(--slide-duration) var(--slide-ease) both;
 }
 
 /* ---------------------------------------------------------------------

@@ -23,8 +23,10 @@ import SessionBars from "@/components/charts/SessionBars";
 import OpponentBars from "@/components/charts/OpponentBars";
 import SplitDonut from "@/components/charts/SplitDonut";
 import ResultScatter from "@/components/charts/ResultScatter";
+import TabTransition from "@/components/TabTransition";
 
-type Tab = "overview" | "taidi" | "mahjong";
+const TABS = ["overview", "taidi", "mahjong"] as const;
+type Tab = (typeof TABS)[number];
 
 function pct(r: number | null): string {
   return r === null ? "—" : `${Math.round(r * 100)}%`;
@@ -490,7 +492,7 @@ function StatsView() {
       ) : (
         <div className="space-y-4">
           <div className="grid grid-cols-3 gap-2">
-            {(["overview", "taidi", "mahjong"] as const).map((x) => (
+            {TABS.map((x) => (
               <button
                 key={x}
                 type="button"
@@ -514,23 +516,25 @@ function StatsView() {
             total={tab === "overview" ? all.length : all.filter((s) => s.game_type === tab).length}
           />
 
-          {scoped.length === 0 ? (
-            <p data-testid="stats-no-match" className="py-8 text-center text-sm text-muted">
-              No sessions match these filters.
-            </p>
-          ) : tab === "overview" ? (
-            <OverviewTab
-              sessions={scoped}
-              t={t}
-              filters={filters}
-              setFilters={setFilters}
-              onSelectRoom={viewing ? undefined : (roomId) => router.push(`/room/${roomId}`)}
-            />
-          ) : tab === "taidi" ? (
-            <TaidiTab sessions={scoped} t={t} />
-          ) : (
-            <MahjongTab sessions={scoped} t={t} />
-          )}
+          <TabTransition tabKey={tab} order={TABS}>
+            {scoped.length === 0 ? (
+              <p data-testid="stats-no-match" className="py-8 text-center text-sm text-muted">
+                No sessions match these filters.
+              </p>
+            ) : tab === "overview" ? (
+              <OverviewTab
+                sessions={scoped}
+                t={t}
+                filters={filters}
+                setFilters={setFilters}
+                onSelectRoom={viewing ? undefined : (roomId) => router.push(`/room/${roomId}`)}
+              />
+            ) : tab === "taidi" ? (
+              <TaidiTab sessions={scoped} t={t} />
+            ) : (
+              <MahjongTab sessions={scoped} t={t} />
+            )}
+          </TabTransition>
         </div>
       )}
     </main>

@@ -7,8 +7,10 @@ import { useStoredUser } from "@/lib/auth";
 import { debtsApi } from "@/lib/debtsApi";
 import type { DebtView } from "@/lib/debtsTypes";
 import { usePolling } from "@/lib/usePolling";
+import TabTransition from "@/components/TabTransition";
 
-type Tab = "owing" | "owed";
+const TABS = ["owing", "owed"] as const;
+type Tab = (typeof TABS)[number];
 
 function dollars(cents: number): string {
   return `$${(cents / 100).toLocaleString(undefined, {
@@ -234,38 +236,40 @@ export default function DebtsPage() {
             </button>
           </div>
 
-          {tab === "owing" &&
-            (data.owing.length === 0 ? (
-              <p className="text-center text-sm text-muted py-8">You don&apos;t owe anyone.</p>
-            ) : (
-              <div className="space-y-3">
-                {data.owing.map((debt) => (
-                  <OwingRow
-                    key={debt.settlement_id}
-                    debt={debt}
-                    busy={busyId === debt.settlement_id}
-                    onMarkPaid={(id) => runAction(id, debtsApi.markPaid, "owing")}
-                  />
-                ))}
-              </div>
-            ))}
+          <TabTransition tabKey={tab} order={TABS}>
+            {tab === "owing" &&
+              (data.owing.length === 0 ? (
+                <p className="text-center text-sm text-muted py-8">You don&apos;t owe anyone.</p>
+              ) : (
+                <div className="space-y-3">
+                  {data.owing.map((debt) => (
+                    <OwingRow
+                      key={debt.settlement_id}
+                      debt={debt}
+                      busy={busyId === debt.settlement_id}
+                      onMarkPaid={(id) => runAction(id, debtsApi.markPaid, "owing")}
+                    />
+                  ))}
+                </div>
+              ))}
 
-          {tab === "owed" &&
-            (data.owed.length === 0 ? (
-              <p className="text-center text-sm text-muted py-8">No one owes you anything.</p>
-            ) : (
-              <div className="space-y-3">
-                {data.owed.map((debt) => (
-                  <OwedRow
-                    key={debt.settlement_id}
-                    debt={debt}
-                    busy={busyId === debt.settlement_id}
-                    onApprove={(id) => runAction(id, debtsApi.approve, "owed")}
-                    onReject={(id) => runAction(id, debtsApi.reject, "owed")}
-                  />
-                ))}
-              </div>
-            ))}
+            {tab === "owed" &&
+              (data.owed.length === 0 ? (
+                <p className="text-center text-sm text-muted py-8">No one owes you anything.</p>
+              ) : (
+                <div className="space-y-3">
+                  {data.owed.map((debt) => (
+                    <OwedRow
+                      key={debt.settlement_id}
+                      debt={debt}
+                      busy={busyId === debt.settlement_id}
+                      onApprove={(id) => runAction(id, debtsApi.approve, "owed")}
+                      onReject={(id) => runAction(id, debtsApi.reject, "owed")}
+                    />
+                  ))}
+                </div>
+              ))}
+          </TabTransition>
         </div>
       )}
     </main>

@@ -6,8 +6,10 @@ import { ApiError } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
 import { friendsApi } from "@/lib/friendsApi";
 import type { FriendsResponse, MyProfile, UserProfile } from "@/lib/friendsTypes";
+import TabTransition from "@/components/TabTransition";
 
-type Tab = "friends" | "requests" | "add";
+const TABS = ["friends", "requests", "add"] as const;
+type Tab = (typeof TABS)[number];
 
 function handle(u: UserProfile): string | null {
   return u.username ? `@${u.username}` : null;
@@ -168,7 +170,7 @@ export default function FriendsPage() {
       )}
 
       <div className="mb-4 grid grid-cols-3 gap-2">
-        {(["friends", "requests", "add"] as const).map((x) => (
+        {TABS.map((x) => (
           <button
             key={x}
             type="button"
@@ -185,127 +187,154 @@ export default function FriendsPage() {
         ))}
       </div>
 
-      {!data ? (
-        <p className="text-center text-sm text-muted">Loading…</p>
-      ) : tab === "friends" ? (
-        data.friends.length === 0 ? (
-          <p data-testid="friends-empty" className="py-8 text-center text-sm text-muted">
-            No friends yet — add someone from the Add tab.
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {data.friends.map((e) => (
-              <PersonRow key={e.id} user={e.user} testId={`friend-${e.user.user_id}`}>
-                <button
-                  type="button"
-                  onClick={() => router.push(`/stats?player=${e.user.user_id}`)}
-                  data-testid={`friend-stats-${e.user.user_id}`}
-                  className={btnGhost}
-                >
-                  Stats
-                </button>
-                <button
-                  type="button"
-                  disabled={busy === e.user.user_id}
-                  onClick={() =>
-                    act(e.user.user_id, () => friendsApi.remove(e.user.user_id), "Removed.")
-                  }
-                  data-testid={`friend-remove-${e.user.user_id}`}
-                  className={btnGhost}
-                >
-                  Remove
-                </button>
-              </PersonRow>
-            ))}
-          </div>
-        )
-      ) : tab === "requests" ? (
-        <div className="space-y-4">
-          <section className="space-y-2">
-            <p className="text-[10px] uppercase tracking-wider text-muted">Received</p>
-            {data.incoming.length === 0 ? (
-              <p className="text-sm text-muted">Nothing waiting on you.</p>
-            ) : (
-              data.incoming.map((e) => (
-                <PersonRow key={e.id} user={e.user} testId={`incoming-${e.id}`}>
-                  <button
-                    type="button"
-                    disabled={busy === e.id}
-                    onClick={() => act(e.id, () => friendsApi.accept(e.id), "Friend added.")}
-                    data-testid={`accept-${e.id}`}
-                    className={btnPrimary}
-                  >
-                    Accept
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy === e.id}
-                    onClick={() => act(e.id, () => friendsApi.dismiss(e.id))}
-                    data-testid={`decline-${e.id}`}
-                    className={btnGhost}
-                  >
-                    Decline
-                  </button>
-                </PersonRow>
-              ))
-            )}
-          </section>
-          <section className="space-y-2">
-            <p className="text-[10px] uppercase tracking-wider text-muted">Sent</p>
-            {data.outgoing.length === 0 ? (
-              <p className="text-sm text-muted">None outstanding.</p>
-            ) : (
-              data.outgoing.map((e) => (
-                <PersonRow key={e.id} user={e.user} sub="Waiting for them" testId={`outgoing-${e.id}`}>
-                  <button
-                    type="button"
-                    disabled={busy === e.id}
-                    onClick={() => act(e.id, () => friendsApi.dismiss(e.id))}
-                    data-testid={`cancel-${e.id}`}
-                    className={btnGhost}
-                  >
-                    Cancel
-                  </button>
-                </PersonRow>
-              ))
-            )}
-          </section>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <form onSubmit={runSearch} className="space-y-2">
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              data-testid="friend-search-input"
-              placeholder="@username or email"
-              className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm outline-none focus:border-brand-strong"
-            />
-            <button
-              type="submit"
-              disabled={busy === "search" || !query.trim()}
-              data-testid="friend-search-btn"
-              className="w-full rounded-xl bg-brand py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-            >
-              Search
-            </button>
-            {/* Exact match only, so say so rather than letting a typo look
-                like "this person doesn't exist". */}
-            <p className="text-center text-[10px] text-muted">
-              Matches a full username or email address exactly.
+      <TabTransition tabKey={tab} order={TABS}>
+        {!data ? (
+          <p className="text-center text-sm text-muted">Loading…</p>
+        ) : tab === "friends" ? (
+          data.friends.length === 0 ? (
+            <p data-testid="friends-empty" className="py-8 text-center text-sm text-muted">
+              No friends yet — add someone from the Add tab.
             </p>
-          </form>
-
-          {results !== null && (
+          ) : (
+            <div className="space-y-2">
+              {data.friends.map((e) => (
+                <PersonRow key={e.id} user={e.user} testId={`friend-${e.user.user_id}`}>
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/stats?player=${e.user.user_id}`)}
+                    data-testid={`friend-stats-${e.user.user_id}`}
+                    className={btnGhost}
+                  >
+                    Stats
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy === e.user.user_id}
+                    onClick={() =>
+                      act(e.user.user_id, () => friendsApi.remove(e.user.user_id), "Removed.")
+                    }
+                    data-testid={`friend-remove-${e.user.user_id}`}
+                    className={btnGhost}
+                  >
+                    Remove
+                  </button>
+                </PersonRow>
+              ))}
+            </div>
+          )
+        ) : tab === "requests" ? (
+          <div className="space-y-4">
             <section className="space-y-2">
-              <p className="text-[10px] uppercase tracking-wider text-muted">Results</p>
-              {results.length === 0 ? (
-                <p data-testid="search-empty" className="text-sm text-muted">
-                  Nobody found. Check the spelling, or add them from a game below.
+              <p className="text-[10px] uppercase tracking-wider text-muted">Received</p>
+              {data.incoming.length === 0 ? (
+                <p className="text-sm text-muted">Nothing waiting on you.</p>
+              ) : (
+                data.incoming.map((e) => (
+                  <PersonRow key={e.id} user={e.user} testId={`incoming-${e.id}`}>
+                    <button
+                      type="button"
+                      disabled={busy === e.id}
+                      onClick={() => act(e.id, () => friendsApi.accept(e.id), "Friend added.")}
+                      data-testid={`accept-${e.id}`}
+                      className={btnPrimary}
+                    >
+                      Accept
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy === e.id}
+                      onClick={() => act(e.id, () => friendsApi.dismiss(e.id))}
+                      data-testid={`decline-${e.id}`}
+                      className={btnGhost}
+                    >
+                      Decline
+                    </button>
+                  </PersonRow>
+                ))
+              )}
+            </section>
+            <section className="space-y-2">
+              <p className="text-[10px] uppercase tracking-wider text-muted">Sent</p>
+              {data.outgoing.length === 0 ? (
+                <p className="text-sm text-muted">None outstanding.</p>
+              ) : (
+                data.outgoing.map((e) => (
+                  <PersonRow key={e.id} user={e.user} sub="Waiting for them" testId={`outgoing-${e.id}`}>
+                    <button
+                      type="button"
+                      disabled={busy === e.id}
+                      onClick={() => act(e.id, () => friendsApi.dismiss(e.id))}
+                      data-testid={`cancel-${e.id}`}
+                      className={btnGhost}
+                    >
+                      Cancel
+                    </button>
+                  </PersonRow>
+                ))
+              )}
+            </section>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <form onSubmit={runSearch} className="space-y-2">
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                data-testid="friend-search-input"
+                placeholder="@username or email"
+                className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm outline-none focus:border-brand-strong"
+              />
+              <button
+                type="submit"
+                disabled={busy === "search" || !query.trim()}
+                data-testid="friend-search-btn"
+                className="w-full rounded-xl bg-brand py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                Search
+              </button>
+              {/* Exact match only, so say so rather than letting a typo look
+                  like "this person doesn't exist". */}
+              <p className="text-center text-[10px] text-muted">
+                Matches a full username or email address exactly.
+              </p>
+            </form>
+
+            {results !== null && (
+              <section className="space-y-2">
+                <p className="text-[10px] uppercase tracking-wider text-muted">Results</p>
+                {results.length === 0 ? (
+                  <p data-testid="search-empty" className="text-sm text-muted">
+                    Nobody found. Check the spelling, or add them from a game below.
+                  </p>
+                ) : (
+                  results.map((u) => (
+                    <PersonRow key={u.user_id} user={u} testId={`result-${u.user_id}`}>
+                      <button
+                        type="button"
+                        disabled={busy === u.user_id}
+                        onClick={() =>
+                          act(u.user_id, () => friendsApi.sendRequest(u.user_id), "Request sent.")
+                        }
+                        data-testid={`add-${u.user_id}`}
+                        className={btnPrimary}
+                      >
+                        Add
+                      </button>
+                    </PersonRow>
+                  ))
+                )}
+              </section>
+            )}
+
+            <section className="space-y-2">
+              <p className="text-[10px] uppercase tracking-wider text-muted">Played with</p>
+              {suggestions.length === 0 ? (
+                <p data-testid="suggestions-empty" className="text-sm text-muted">
+                  Nobody new — everyone you&apos;ve played with is already connected.
                 </p>
               ) : (
-                results.map((u) => (
-                  <PersonRow key={u.user_id} user={u} testId={`result-${u.user_id}`}>
+                suggestions.map((u) => (
+                  <PersonRow key={u.user_id} user={u} testId={`suggestion-${u.user_id}`}>
                     <button
                       type="button"
                       disabled={busy === u.user_id}
@@ -321,34 +350,9 @@ export default function FriendsPage() {
                 ))
               )}
             </section>
-          )}
-
-          <section className="space-y-2">
-            <p className="text-[10px] uppercase tracking-wider text-muted">Played with</p>
-            {suggestions.length === 0 ? (
-              <p data-testid="suggestions-empty" className="text-sm text-muted">
-                Nobody new — everyone you&apos;ve played with is already connected.
-              </p>
-            ) : (
-              suggestions.map((u) => (
-                <PersonRow key={u.user_id} user={u} testId={`suggestion-${u.user_id}`}>
-                  <button
-                    type="button"
-                    disabled={busy === u.user_id}
-                    onClick={() =>
-                      act(u.user_id, () => friendsApi.sendRequest(u.user_id), "Request sent.")
-                    }
-                    data-testid={`add-${u.user_id}`}
-                    className={btnPrimary}
-                  >
-                    Add
-                  </button>
-                </PersonRow>
-              ))
-            )}
-          </section>
-        </div>
-      )}
+          </div>
+        )}
+      </TabTransition>
     </main>
   );
 }

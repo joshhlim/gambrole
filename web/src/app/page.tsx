@@ -12,7 +12,6 @@ import {
 import type { ActiveRoom } from "@/lib/types";
 import SupabaseAuthForm from "@/components/SupabaseAuthForm";
 import TopBar from "@/components/TopBar";
-import HomeBackdrop from "@/components/HomeBackdrop";
 
 export default function HomePage() {
   const router = useRouter();
@@ -67,7 +66,6 @@ export default function HomePage() {
 
   return (
     <main className="flex flex-1 flex-col px-6 py-6">
-      <HomeBackdrop />
       {/* Pinned to the top of the page; the hero and the two actions stay
           centred in what's left. */}
       {user && (

@@ -1,13 +1,16 @@
 /**
- * Slow-moving colour behind the home screen, so the first thing you see
- * isn't a flat sheet of off-white.
+ * Slow-moving colour behind every screen, so the app never looks like a
+ * flat sheet of off-white.
+ *
+ * Mounted once in the root layout, outside the page-transition wrapper: it
+ * should sit still while pages slide across it, not travel with them.
  *
  * Three blurred pools in the brand palette, drifting on long offset cycles
  * so they never visibly loop. Transform and opacity only — it stays on the
  * compositor and costs a phone nothing — and it sits behind everything with
  * pointer events off, so it can't interfere with anything tappable.
  */
-export default function HomeBackdrop() {
+export default function Backdrop() {
   return (
     <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
       <div
