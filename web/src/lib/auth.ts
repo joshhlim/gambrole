@@ -32,12 +32,22 @@ export interface StoredAuth {
 }
 
 function supabaseUserToCurrentUser(user: User): CurrentUser {
-  const displayName = (user.user_metadata?.display_name as string | undefined) || user.email || "Player";
+  const displayName =
+    (user.user_metadata?.display_name as string | undefined) ||
+    user.email ||
+    "Player";
   return { user_id: user.id, display_name: displayName };
 }
 
-function supabaseSessionToStoredAuth(session: Session | null): StoredAuth | null {
-  return session ? { token: session.access_token, user: supabaseUserToCurrentUser(session.user) } : null;
+function supabaseSessionToStoredAuth(
+  session: Session | null,
+): StoredAuth | null {
+  return session
+    ? {
+        token: session.access_token,
+        user: supabaseUserToCurrentUser(session.user),
+      }
+    : null;
 }
 
 // api.ts reads the bearer token synchronously on every request, but
@@ -62,10 +72,23 @@ export function getStoredAuth(): StoredAuth | null {
   }
 }
 
+/**
+ * Dev mode's answer to Supabase's `onAuthStateChange`. localStorage writes
+ * are invisible to the tab that makes them, which didn't matter while each
+ * signed-in screen owned its own copy of the user — but the top bar now
+ * outlives every navigation, so signing out has to reach it.
+ */
+const AUTH_EVENT = "gambrole:auth";
+
+function announceAuthChange(): void {
+  window.dispatchEvent(new Event(AUTH_EVENT));
+}
+
 /** Dev mode only — Supabase manages its own persistence via cookies. */
 export function storeAuth(auth: StoredAuth): void {
   window.localStorage.setItem(TOKEN_KEY, auth.token);
   window.localStorage.setItem(USER_KEY, JSON.stringify(auth.user));
+  announceAuthChange();
 }
 
 export async function signOut(): Promise<void> {
@@ -75,6 +98,7 @@ export async function signOut(): Promise<void> {
   }
   window.localStorage.removeItem(TOKEN_KEY);
   window.localStorage.removeItem(USER_KEY);
+  announceAuthChange();
 }
 
 export interface AuthCheck {
@@ -109,18 +133,23 @@ export function useStoredUser(): AuthCheck {
         cachedSupabaseAuth = auth;
         setState({ user: auth?.user ?? null, checked: true });
       });
-      const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-        const auth = supabaseSessionToStoredAuth(session);
-        cachedSupabaseAuth = auth;
-        setState({ user: auth?.user ?? null, checked: true });
-      });
+      const { data: sub } = supabase.auth.onAuthStateChange(
+        (_event, session) => {
+          const auth = supabaseSessionToStoredAuth(session);
+          cachedSupabaseAuth = auth;
+          setState({ user: auth?.user ?? null, checked: true });
+        },
+      );
       return () => {
         cancelled = true;
         sub.subscription.unsubscribe();
       };
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setState({ user: getStoredAuth()?.user ?? null, checked: true });
+    const read = () =>
+      setState({ user: getStoredAuth()?.user ?? null, checked: true });
+    read();
+    window.addEventListener(AUTH_EVENT, read);
+    return () => window.removeEventListener(AUTH_EVENT, read);
   }, []);
   return state;
 }
@@ -174,9 +203,15 @@ export async function signUpWithPassword(
   return supabaseSessionToStoredAuth(data.session);
 }
 
-export async function signInWithPassword(email: string, password: string): Promise<StoredAuth> {
+export async function signInWithPassword(
+  email: string,
+  password: string,
+): Promise<StoredAuth> {
   if (!supabase) throw new Error("Supabase auth is not configured.");
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
   if (error) throw error;
   const auth = supabaseSessionToStoredAuth(data.session);
   if (!auth) throw new Error("Sign-in did not return a session.");

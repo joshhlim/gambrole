@@ -3,6 +3,7 @@ import { Geist, Geist_Mono, Outfit } from "next/font/google";
 import "./globals.css";
 import RouteTransition from "@/components/RouteTransition";
 import Backdrop from "@/components/Backdrop";
+import TopBar from "@/components/TopBar";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -40,6 +41,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
         <Backdrop />
+        {/* Outside RouteTransition on purpose: the bar is the one fixed
+            point on every screen, so pages slide underneath it rather
+            than carrying it along. It hides itself when signed out. */}
+        <TopBar />
         <RouteTransition>{children}</RouteTransition>
       </body>
     </html>

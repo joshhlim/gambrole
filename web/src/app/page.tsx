@@ -3,27 +3,17 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import {
-  devLogin,
-  getStoredAuth,
-  supabase,
-  type CurrentUser,
-} from "@/lib/auth";
+import { devLogin, supabase, useStoredUser } from "@/lib/auth";
 import type { ActiveRoom } from "@/lib/types";
 import SupabaseAuthForm from "@/components/SupabaseAuthForm";
-import TopBar from "@/components/TopBar";
 
 export default function HomePage() {
   const router = useRouter();
-  // See useStoredUser's doc comment in lib/auth.ts — a lazy initializer
-  // here would mismatch server vs. first-client-hydration render for any
-  // returning user. This needs its own setter (login handlers update it
-  // immediately) so it can't just use that shared hook.
-  const [user, setUser] = useState<CurrentUser | null>(null);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setUser(getStoredAuth()?.user ?? null);
-  }, []);
+  // Was a local copy with its own setter, back when the login handlers
+  // were the only thing that could change it. Sign-out now lives in the
+  // top bar, which this page can't reach — so both of them read the one
+  // hook, and both branches of it report their own changes.
+  const { user } = useStoredUser();
   // The way back into a live game from a device that never saw its URL —
   // e.g. picking up on a laptop after the phone died mid-game. Membership
   // lives on the account, not the device, so the seat is still there.
@@ -55,8 +45,8 @@ export default function HomePage() {
     setBusy(true);
     setError(null);
     try {
-      const auth = await devLogin(name);
-      setUser(auth.user);
+      // storeAuth inside devLogin announces this; useStoredUser hears it.
+      await devLogin(name);
     } catch {
       setError("Couldn't sign in. Is the API running?");
     } finally {
@@ -66,19 +56,13 @@ export default function HomePage() {
 
   return (
     <main className="flex flex-1 flex-col px-6 py-6">
-      {/* Pinned to the top of the page; the hero and the two actions stay
-          centred in what's left. */}
-      {user && (
-        <div className="mx-auto w-full max-w-sm">
-          <TopBar />
-        </div>
-      )}
-
       <div className="flex w-full flex-1 items-center justify-center">
         <div className="w-full max-w-sm">
           <div className="text-center mb-10">
             <div className="mx-auto mb-4 flex h-16 w-16 rotate-3 items-center justify-center rounded-2xl bg-brand shadow-lg shadow-brand/25">
-              <span className="font-display text-3xl font-extrabold text-gold-bright">G</span>
+              <span className="font-display text-3xl font-extrabold text-gold-bright">
+                G
+              </span>
             </div>
             <h1 className="text-3xl font-extrabold tracking-tight text-brand">
               Gam<span className="text-gold">BRO</span>le
@@ -90,7 +74,7 @@ export default function HomePage() {
 
           {!user ? (
             supabase ? (
-              <SupabaseAuthForm onSignedIn={setUser} />
+              <SupabaseAuthForm onSignedIn={() => {}} />
             ) : (
               <form onSubmit={handleDevLogin} className="space-y-3">
                 <input
