@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { updateDisplayName, updateEmail, updatePassword } from "@/lib/account";
 import { signOut, supabase, useStoredUser, type CurrentUser } from "@/lib/auth";
+import { ApiError } from "@/lib/api";
+import { friendsApi } from "@/lib/friendsApi";
 
 const inputCls =
   "w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm outline-none focus:border-brand-strong";
@@ -15,9 +17,10 @@ export default function SettingsPage() {
   const [emailChecked, setEmailChecked] = useState(false);
 
   useEffect(() => {
-    // Settings only makes sense for real (Supabase) accounts — dev mode has
-    // nothing persistent to manage.
-    if (checked && (!user || !supabase)) router.replace("/");
+    // Used to be Supabase-only, back when this page was purely account
+    // management. Your username lives here now, and every account has one,
+    // so anyone signed in belongs here.
+    if (checked && !user) router.replace("/");
   }, [checked, user, router]);
 
   useEffect(() => {
@@ -28,7 +31,8 @@ export default function SettingsPage() {
     });
   }, [user]);
 
-  if (!user || !supabase || !emailChecked) {
+  // Only the Supabase-backed sections need the email resolved first.
+  if (!user || (supabase && !emailChecked)) {
     return <main className="flex-1 flex items-center justify-center text-muted text-sm">Loading…</main>;
   }
 
@@ -45,11 +49,81 @@ export default function SettingsPage() {
         <h1 className="text-lg font-extrabold text-brand">Settings</h1>
       </div>
 
-      {/* AccountForms only mounts once user/email are resolved, so its
-          local input state can seed directly from them with no sync
-          effect needed — see the note on AccountForms below. */}
-      <AccountForms user={user} initialEmail={email ?? ""} onSignOut={() => router.push("/")} />
+      <div className="space-y-8">
+        {/* Your handle is app-level, so it's here whatever you signed in
+            with. Everything below it is Supabase account management and
+            only exists for real accounts. */}
+        <UsernameForm />
+        {supabase && (
+          <AccountForms
+            user={user}
+            initialEmail={email ?? ""}
+            onSignOut={() => router.push("/")}
+          />
+        )}
+      </div>
     </main>
+  );
+}
+
+function UsernameForm() {
+  const [usernameInput, setUsernameInput] = useState("");
+  const [usernameBusy, setUsernameBusy] = useState(false);
+  const [usernameMsg, setUsernameMsg] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    friendsApi
+      .me()
+      .then((p) => !cancelled && setUsernameInput(p.username ?? ""))
+      .catch(() => {
+        /* the rest of Settings works without it */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleSaveUsername(e: React.FormEvent) {
+    e.preventDefault();
+    setUsernameBusy(true);
+    setUsernameMsg(null);
+    try {
+      const r = await friendsApi.setUsername(usernameInput);
+      setUsernameInput(r.username);
+      setUsernameMsg(`Saved as @${r.username}.`);
+    } catch (err) {
+      setUsernameMsg(err instanceof ApiError ? err.message : "Couldn't save that username.");
+    } finally {
+      setUsernameBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      {/* Everyone is given a handle on sign-up; this is where it changes. */}
+      <form onSubmit={handleSaveUsername} className="space-y-2">
+        <label className="block text-xs text-muted">Username</label>
+        <input
+          data-testid="settings-username-input"
+          className={inputCls}
+          value={usernameInput}
+          autoCapitalize="none"
+          autoCorrect="off"
+          onChange={(e) => setUsernameInput(e.target.value)}
+        />
+        <button
+          type="submit"
+          disabled={usernameBusy || !usernameInput.trim()}
+          data-testid="settings-save-username-btn"
+          className="rounded-xl bg-brand px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          Save
+        </button>
+        <p className="text-xs text-muted">
+          {usernameMsg ?? "Friends find you by this. Letters, numbers and underscores."}
+        </p>
+      </form>
+    </div>
   );
 }
 

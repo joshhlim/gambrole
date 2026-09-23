@@ -22,12 +22,15 @@ from ..friends_service import (
 )
 from ..schemas import SendFriendRequest, SetUsernameRequest
 from ..users_service import (
+    USERNAME_HELP,
+    USERNAME_RE,
     InvalidUsername,
     UsernameTaken,
     ensure_user,
     get_profile,
     search,
     set_username,
+    username_taken,
 )
 
 router = APIRouter(tags=["friends"])
@@ -60,6 +63,30 @@ async def put_username(
     except UsernameTaken as e:
         raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
     return {"username": username}
+
+
+@router.get("/users/username-available")
+async def username_available(
+    u: str = Query(min_length=1, max_length=24),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Is this handle free? Deliberately unauthenticated, because it runs on
+    the sign-up form before an account exists — which is the only way to
+    refuse a taken username *before* Supabase creates the account.
+
+    It discloses nothing but yes/no: no owner, no name, no address. That a
+    handle is taken is unavoidable knowledge in any system with unique
+    usernames, and the authenticated search already answers it.
+    """
+    candidate = u.strip().lstrip("@").lower()
+    if not USERNAME_RE.match(candidate):
+        return {"available": False, "reason": USERNAME_HELP}
+    taken = await username_taken(session, candidate)
+    return {
+        "available": not taken,
+        "reason": f"@{candidate} is already taken." if taken else None,
+        "username": candidate,
+    }
 
 
 @router.get("/users/search")

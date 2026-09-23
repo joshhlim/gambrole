@@ -101,7 +101,7 @@ export default function HistoryPage() {
         >
           ←
         </button>
-        <h1 className="text-lg font-extrabold text-brand">Game History</h1>
+        <h1 className="text-lg font-extrabold text-brand">My Games</h1>
       </div>
 
       {error && (

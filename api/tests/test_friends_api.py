@@ -25,12 +25,38 @@ async def _set_email(user_id: str, email: str) -> None:
         )
 
 
-async def test_opening_the_app_registers_you(make_device):
+async def test_opening_the_app_registers_you_with_a_username(make_device):
+    """Everyone gets a handle automatically, so no screen ever has to deal
+    with a player who hasn't picked one."""
     alice = await make_device("Alice")
     me = await _register(alice)
     assert me["display_name"] == "Alice"
-    assert me["username"] is None
     assert me["user_id"] == alice.user_id
+    # Dev tokens carry no email, so it comes from the display name.
+    assert me["username"] == "alice"
+
+    # A second Alice can't take the same handle, so she gets a variant.
+    other = await make_device("Alice")
+    assert (await _register(other))["username"] == "alice2"
+
+    # Re-registering doesn't churn an existing handle.
+    assert (await _register(alice))["username"] == "alice"
+
+
+async def test_username_is_derived_from_the_email_when_there_is_one(make_device):
+    alice = await make_device("Alice")
+    await _register(alice)
+    # Simulate a Supabase account: the address is what people know you by.
+    await _set_email(alice.user_id, "jo.shlim@gmail.com")
+    bob = await make_device("Bob")
+    await _register(bob)
+
+    from app.users_service import suggest_username
+
+    assert suggest_username("jo.shlim@gmail.com", "Josh") == "joshlim"
+    assert suggest_username(None, "Qu Zhetao") == "quzhetao"
+    assert suggest_username("", "??") == "player"  # nothing usable
+    del bob
 
 
 async def test_username_claim_rules(make_device):
@@ -198,3 +224,33 @@ async def test_suggestions_come_from_shared_games_and_drop_once_connected(make_d
     # Once a request is open they stop being a suggestion.
     await alice.post("/friends/requests", json={"user_id": bob.user_id})
     assert (await alice.get("/friends/suggestions")).json()["results"] == []
+
+
+async def test_username_availability_is_public_and_says_nothing_else(make_device):
+    """Runs on the sign-up form, before any account exists — so it can't
+    require auth, and must give away nothing but yes/no."""
+    alice = await make_device("Alice")
+    await _register(alice)
+    await alice.put("/users/me/username", json={"username": "takenname"})
+
+    from app.main import app
+    from httpx import ASGITransport, AsyncClient
+
+    # No Authorization header at all.
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as anon:
+        r = await anon.get("/users/username-available", params={"u": "@TakenName"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["available"] is False
+        assert "already taken" in body["reason"]
+        # Nothing about who holds it.
+        assert "user_id" not in body and "display_name" not in body and "email" not in body
+
+        r = await anon.get("/users/username-available", params={"u": "wideopen"})
+        assert r.json() == {"available": True, "reason": None, "username": "wideopen"}
+
+        # Malformed handles report the rule rather than crashing.
+        for bad in ("ab", "has space", "no-dash"):
+            assert (await anon.get("/users/username-available", params={"u": bad})).json()[
+                "available"
+            ] is False

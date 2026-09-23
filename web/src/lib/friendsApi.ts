@@ -13,6 +13,12 @@ export const friendsApi = {
       method: "PUT",
       body: JSON.stringify({ username }),
     }),
+  /** Pre-signup check — works logged out, which is what lets the form
+   * refuse a taken handle before the account is created. */
+  usernameAvailable: (u: string) =>
+    request<{ available: boolean; reason: string | null; username?: string }>(
+      `/users/username-available?u=${encodeURIComponent(u)}`,
+    ),
   search: (q: string) =>
     request<{ results: UserProfile[] }>(`/users/search?q=${encodeURIComponent(q)}`),
   list: () => request<FriendsResponse>("/friends"),

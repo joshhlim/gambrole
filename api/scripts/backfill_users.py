@@ -32,6 +32,7 @@ from app.db import events as events_table  # noqa: E402
 from app.db import rooms as rooms_table  # noqa: E402
 from app.db import users as users_table  # noqa: E402
 from app.time import utcnow  # noqa: E402
+from app.users_service import assign_username, suggest_username  # noqa: E402
 from sqlalchemy import func, select, text  # noqa: E402
 from sqlalchemy.dialects.postgresql import insert as pg_insert  # noqa: E402
 
@@ -124,6 +125,23 @@ async def backfill(*, dry_run: bool) -> None:
         )
         await session.commit()
         print(f"Seeded {len(rows)} user(s).")
+
+        # Everyone needs a handle: friends search by it, and the app should
+        # never show a player without one. Derived from their address, and
+        # changeable in Settings afterwards.
+        missing = (
+            await session.execute(
+                select(
+                    users_table.c.user_id, users_table.c.email, users_table.c.display_name
+                ).where(users_table.c.username.is_(None))
+            )
+        ).all()
+        for row in missing:
+            handle = await assign_username(
+                session, row.user_id, suggest_username(row.email, row.display_name)
+            )
+            print(f"  @{handle:<20} {row.display_name}")
+        print(f"Assigned {len(missing)} username(s).")
 
 
 def main() -> int:

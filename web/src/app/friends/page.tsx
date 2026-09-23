@@ -52,8 +52,6 @@ export default function FriendsPage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<UserProfile[] | null>(null);
   const [profile, setProfile] = useState<MyProfile | null>(null);
-  const [usernameInput, setUsernameInput] = useState("");
-  const [editingHandle, setEditingHandle] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,7 +73,6 @@ export default function FriendsPage() {
       .then(([mine, list, sugg]) => {
         if (cancelled) return;
         setProfile(mine);
-        setUsernameInput(mine.username ?? "");
         setData(list);
         setSuggestions(sugg.results);
       })
@@ -101,24 +98,6 @@ export default function FriendsPage() {
       if (after) setNote(after);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "That didn't go through.");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function saveUsername(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy("username");
-    setError(null);
-    setNote(null);
-    try {
-      const r = await friendsApi.setUsername(usernameInput);
-      setProfile((p) => (p ? { ...p, username: r.username } : p));
-      setUsernameInput(r.username);
-      setEditingHandle(false);
-      setNote(`You're @${r.username}.`);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't save that username.");
     } finally {
       setBusy(null);
     }
@@ -167,66 +146,26 @@ export default function FriendsPage() {
         </p>
       )}
 
-      {/* Your own handle lives here rather than in Settings: Settings is
-          Supabase-only, and this is the screen where not having a username
-          actually costs you something. */}
-      {profile &&
-        (editingHandle || !profile.username ? (
-          <form onSubmit={saveUsername} className="mb-4 space-y-2 rounded-xl border border-border bg-surface px-3 py-2.5">
-            <p className="text-[10px] uppercase tracking-wider text-muted">Your username</p>
-            <input
-              value={usernameInput}
-              onChange={(e) => setUsernameInput(e.target.value)}
-              data-testid="username-input"
-              placeholder="pick a username"
-              autoCapitalize="none"
-              autoCorrect="off"
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-brand-strong"
-            />
-            <div className="flex gap-2">
-              <button
-                type="submit"
-                disabled={busy === "username" || !usernameInput.trim()}
-                data-testid="username-save-btn"
-                className={btnPrimary}
-              >
-                Save
-              </button>
-              {profile.username && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUsernameInput(profile.username ?? "");
-                    setEditingHandle(false);
-                  }}
-                  className={btnGhost}
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-            <p className="text-[10px] text-muted">
-              Letters, numbers and underscores. This is how friends find you.
+      {/* Read-only: handles are chosen at sign-up and changed in Settings,
+          so this screen just tells you what yours is. */}
+      {profile?.username && (
+        <div className="mb-4 flex items-center justify-between rounded-xl border border-border bg-surface px-3 py-2.5">
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-muted">Friends find you as</p>
+            <p data-testid="my-username" className="text-sm font-semibold text-brand">
+              @{profile.username}
             </p>
-          </form>
-        ) : (
-          <div className="mb-4 flex items-center justify-between rounded-xl border border-border bg-surface px-3 py-2.5">
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted">You are</p>
-              <p data-testid="my-username" className="text-sm font-semibold text-brand">
-                @{profile.username}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setEditingHandle(true)}
-              data-testid="username-edit-btn"
-              className={btnGhost}
-            >
-              Change
-            </button>
           </div>
-        ))}
+          <button
+            type="button"
+            onClick={() => router.push("/settings")}
+            data-testid="username-change-link"
+            className={btnGhost}
+          >
+            Change
+          </button>
+        </div>
+      )}
 
       <div className="mb-4 grid grid-cols-3 gap-2">
         {(["friends", "requests", "add"] as const).map((x) => (

@@ -194,7 +194,7 @@ export default function DebtsPage() {
         >
           ←
         </button>
-        <h1 className="text-lg font-extrabold text-brand">Debts</h1>
+        <h1 className="text-lg font-extrabold text-brand">My Debts</h1>
       </div>
 
       {(error || actionError) && (
