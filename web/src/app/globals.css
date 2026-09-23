@@ -10,6 +10,9 @@
   --brand-strong: #1e6b4f;
   --gold: #d9b44a;
   --danger: #c0392b;
+  /* A warmer, lighter gold for text on dark ground, where the base gold
+     goes muddy. */
+  --gold-bright: #eccd72;
 }
 
 @theme inline {
@@ -21,12 +24,136 @@
   --color-brand: var(--brand);
   --color-brand-strong: var(--brand-strong);
   --color-gold: var(--gold);
+  --color-gold-bright: var(--gold-bright);
   --color-danger: var(--danger);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-outfit);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
+}
+
+/* Headings and the logo carry the personality; body copy stays on the
+   neutral sans so scores and names remain easy to scan. */
+h1,
+h2,
+.font-display {
+  font-family: var(--font-outfit), var(--font-geist-sans), sans-serif;
+  letter-spacing: -0.015em;
+}
+
+/* Money lines up in columns when every digit is the same width — worth it
+   in an app that's mostly amounts stacked on top of each other. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------
+   Page transitions.
+
+   The incoming page slides in from the side it conceptually came from:
+   from the right when going deeper, from the left when going back. Only
+   the arriving page animates — keeping the outgoing one mounted would
+   mean holding two trees and their fetches alive for the sake of a
+   250ms effect.
+   --------------------------------------------------------------------- */
+@keyframes slide-from-right {
+  from {
+    opacity: 0;
+    transform: translate3d(18px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    /* `none`, not translate3d(0,0,0): with `both` fill the end state
+       persists, and any transform makes this element the containing block
+       for position:fixed children — which would trap the backdrop inside
+       the page wrapper instead of the viewport. */
+    transform: none;
+  }
+}
+
+@keyframes slide-from-left {
+  from {
+    opacity: 0;
+    transform: translate3d(-18px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.route-forward {
+  animation: slide-from-right 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.route-back {
+  animation: slide-from-left 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ---------------------------------------------------------------------
+   The home backdrop: three slow-drifting pools of colour. Pure CSS and
+   transform/opacity only, so it stays on the compositor and costs a
+   phone nothing.
+   --------------------------------------------------------------------- */
+@keyframes drift-a {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(6%, -4%, 0) scale(1.12);
+  }
+}
+
+@keyframes drift-b {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1.05);
+  }
+  50% {
+    transform: translate3d(-7%, 5%, 0) scale(0.95);
+  }
+}
+
+@keyframes drift-c {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(0.95);
+  }
+  50% {
+    transform: translate3d(4%, 7%, 0) scale(1.1);
+  }
+}
+
+.blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(60px);
+  will-change: transform;
+}
+
+.blob-a {
+  animation: drift-a 19s ease-in-out infinite;
+}
+.blob-b {
+  animation: drift-b 24s ease-in-out infinite;
+}
+.blob-c {
+  animation: drift-c 31s ease-in-out infinite;
+}
+
+/* Anyone who has asked their device for less movement gets none of it —
+   the layout is identical either way. */
+@media (prefers-reduced-motion: reduce) {
+  .route-forward,
+  .route-back,
+  .blob-a,
+  .blob-b,
+  .blob-c {
+    animation: none;
+  }
 }

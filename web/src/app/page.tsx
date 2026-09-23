@@ -12,6 +12,7 @@ import {
 import type { ActiveRoom } from "@/lib/types";
 import SupabaseAuthForm from "@/components/SupabaseAuthForm";
 import TopBar from "@/components/TopBar";
+import HomeBackdrop from "@/components/HomeBackdrop";
 
 export default function HomePage() {
   const router = useRouter();
@@ -66,6 +67,7 @@ export default function HomePage() {
 
   return (
     <main className="flex flex-1 flex-col px-6 py-6">
+      <HomeBackdrop />
       {/* Pinned to the top of the page; the hero and the two actions stay
           centred in what's left. */}
       {user && (
@@ -77,12 +79,15 @@ export default function HomePage() {
       <div className="flex w-full flex-1 items-center justify-center">
         <div className="w-full max-w-sm">
           <div className="text-center mb-10">
-            <div className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-brand flex items-center justify-center">
-              <span className="text-gold font-serif text-2xl font-bold">G</span>
+            <div className="mx-auto mb-4 flex h-16 w-16 rotate-3 items-center justify-center rounded-2xl bg-brand shadow-lg shadow-brand/25">
+              <span className="font-display text-3xl font-extrabold text-gold-bright">G</span>
             </div>
-            <h1 className="text-2xl font-extrabold tracking-tight text-brand">
+            <h1 className="text-3xl font-extrabold tracking-tight text-brand">
               Gam<span className="text-gold">BRO</span>le
             </h1>
+            <p className="mt-1.5 text-[10px] uppercase tracking-[0.25em] text-muted">
+              Game night, settled
+            </p>
           </div>
 
           {!user ? (

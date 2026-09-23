@@ -46,7 +46,7 @@ function GameCard({ game }: { game: HistoryEntry }) {
           </p>
         </div>
         <p
-          className={`text-lg font-bold ${game.net_cents < 0 ? "text-danger" : "text-brand-strong"}`}
+          className={`text-lg font-bold tabular ${game.net_cents < 0 ? "text-danger" : "text-brand-strong"}`}
         >
           {dollars(game.net_cents)}
         </p>

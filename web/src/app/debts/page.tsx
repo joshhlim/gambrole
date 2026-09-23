@@ -53,7 +53,7 @@ function OwingRow({
                 : ""}
           </p>
         </div>
-        <p className="text-lg font-bold text-danger">{dollars(debt.amount_cents)}</p>
+        <p className="text-lg font-bold tabular text-danger">{dollars(debt.amount_cents)}</p>
       </div>
       <div className="mt-2">
         {debt.status === "pending" && (
@@ -109,7 +109,7 @@ function OwedRow({
                 : ""}
           </p>
         </div>
-        <p className="text-lg font-bold text-brand-strong">{dollars(debt.amount_cents)}</p>
+        <p className="text-lg font-bold tabular text-brand-strong">{dollars(debt.amount_cents)}</p>
       </div>
       <div className="mt-2">
         {debt.status === "pending" && <p className="text-xs text-muted">Not yet marked paid.</p>}
