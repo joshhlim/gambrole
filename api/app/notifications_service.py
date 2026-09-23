@@ -30,8 +30,12 @@ NotificationKind = Literal["debt_to_pay", "debt_to_approve", "friend_request"]
 class Notification(BaseModel):
     kind: NotificationKind
     #: Who it involves — the person you owe, who says they paid you, or who
-    #: asked to be friends.
+    #: asked to be friends. Display name, as a fallback for the handle.
     counterparty: str
+    #: Their handle, which is what the bell actually shows. None only for
+    #: someone missing from the directory entirely — see the note on
+    #: `names` below.
+    counterparty_username: str | None = None
     #: Only set for the debt kinds. Formatting stays on the client.
     amount_cents: int | None = None
     #: The settlement or friendship this came from, so the UI can deep-link.
@@ -75,36 +79,42 @@ async def build_notifications_for(session: AsyncSession, player_id: UUID) -> Not
     involved = {
         pid for row in settlements for pid in (row.from_player, row.to_player) if pid != player_id
     } | {row.requester_id for row in requests}
-    names = {
-        pid: profile.display_name
-        for pid, profile in (await profiles_for(session, list(involved))).items()
-    }
+    # Anyone who creates or joins a room is recorded (users_service.
+    # ensure_user), so a miss here means a game played before the directory
+    # existed — scripts/backfill_users.py is what fills those in.
+    directory = await profiles_for(session, list(involved))
 
     items: list[Notification] = []
     for row in settlements:
         if row.from_player == player_id:
+            other = directory.get(row.to_player)
             items.append(
                 Notification(
                     kind="debt_to_pay",
-                    counterparty=names.get(row.to_player, "Someone"),
+                    counterparty=other.display_name if other else "Someone",
+                    counterparty_username=other.username if other else None,
                     amount_cents=row.amount_cents,
                     ref_id=row.id,
                 )
             )
         else:
+            other = directory.get(row.from_player)
             items.append(
                 Notification(
                     kind="debt_to_approve",
-                    counterparty=names.get(row.from_player, "Someone"),
+                    counterparty=other.display_name if other else "Someone",
+                    counterparty_username=other.username if other else None,
                     amount_cents=row.amount_cents,
                     ref_id=row.id,
                 )
             )
     for row in requests:
+        other = directory.get(row.requester_id)
         items.append(
             Notification(
                 kind="friend_request",
-                counterparty=names.get(row.requester_id, "Someone"),
+                counterparty=other.display_name if other else "Someone",
+                counterparty_username=other.username if other else None,
                 ref_id=row.id,
             )
         )

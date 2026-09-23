@@ -38,6 +38,8 @@ async def test_a_debt_notifies_only_the_person_who_has_to_act(make_device):
     assert bob_bell["total"] == 1
     assert bob_bell["items"][0]["kind"] == "debt_to_pay"
     assert bob_bell["items"][0]["counterparty"] == "Alice"
+    # The handle is what the bell shows.
+    assert bob_bell["items"][0]["counterparty_username"] == "alice"
     assert bob_bell["items"][0]["amount_cents"] > 0
     assert (await alice.get("/notifications")).json()["total"] == 0
 
@@ -49,6 +51,7 @@ async def test_a_debt_notifies_only_the_person_who_has_to_act(make_device):
     assert alice_bell["total"] == 1
     assert alice_bell["items"][0]["kind"] == "debt_to_approve"
     assert alice_bell["items"][0]["counterparty"] == "Bob"
+    assert alice_bell["items"][0]["counterparty_username"] == "bob"
 
     # Approving clears it for everyone.
     await alice.post(f"/debts/{settlement_id}/approve")
@@ -68,6 +71,7 @@ async def test_friend_requests_notify_the_recipient_only(make_device):
     assert bell["total"] == 1
     assert bell["items"][0]["kind"] == "friend_request"
     assert bell["items"][0]["counterparty"] == "Alice"
+    assert bell["items"][0]["counterparty_username"] == "alice"
     assert bell["items"][0]["amount_cents"] is None
 
     edge_id = bell["items"][0]["ref_id"]
@@ -87,3 +91,24 @@ async def test_everything_pending_appears_together(make_device):
     bell = (await bob.get("/notifications")).json()
     assert bell["total"] == 2
     assert {i["kind"] for i in bell["items"]} == {"debt_to_pay", "friend_request"}
+
+
+async def test_a_player_missing_from_the_directory_degrades_gracefully(make_device):
+    """Games played before the directory existed have no row to look up.
+    The backfill fixes that, but the bell must not break meanwhile."""
+    from app.db import engine
+    from app.db import users as users_table
+    from sqlalchemy import delete
+
+    alice = await make_device("Alice")
+    bob = await make_device("Bob")
+    await _settled_game(alice, bob)
+
+    async with engine.begin() as conn:
+        await conn.execute(delete(users_table).where(users_table.c.user_id == alice.user_id))
+
+    bell = (await bob.get("/notifications")).json()
+    assert bell["total"] == 1
+    assert bell["items"][0]["counterparty_username"] is None
+    assert bell["items"][0]["counterparty"] == "Someone"
+    assert bell["items"][0]["amount_cents"] > 0  # the debt is still correct

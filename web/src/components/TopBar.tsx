@@ -10,8 +10,15 @@ import type { MyProfile } from "@/lib/friendsTypes";
 interface Notification {
   kind: "debt_to_pay" | "debt_to_approve" | "friend_request";
   counterparty: string;
+  counterparty_username: string | null;
   amount_cents: number | null;
   ref_id: string;
+}
+
+/** Handles are how people refer to each other here, so lead with one and
+ * keep the display name as the fallback. */
+function who(n: Notification): string {
+  return n.counterparty_username ? `@${n.counterparty_username}` : n.counterparty;
 }
 
 function money(cents: number): string {
@@ -22,11 +29,11 @@ function money(cents: number): string {
 function describe(n: Notification): string {
   switch (n.kind) {
     case "debt_to_pay":
-      return `You owe ${n.counterparty} ${money(n.amount_cents ?? 0)}`;
+      return `You owe ${who(n)} ${money(n.amount_cents ?? 0)}`;
     case "debt_to_approve":
-      return `${n.counterparty} says they paid you ${money(n.amount_cents ?? 0)}`;
+      return `${who(n)} says they paid you ${money(n.amount_cents ?? 0)}`;
     case "friend_request":
-      return `${n.counterparty} wants to be friends`;
+      return `${who(n)} wants to be friends`;
   }
 }
 
