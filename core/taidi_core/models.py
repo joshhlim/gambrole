@@ -12,7 +12,24 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
+
+# Validation context passed when folding stored events (see machine.apply).
+# Rules are checked when a game starts; replaying that start later must not
+# re-judge them against checks added since, or tightening a limit would make
+# every older game that broke it impossible to load.
+REPLAY = {"replay": True}
+
+
+def is_replay(info: ValidationInfo) -> bool:
+    return bool(info.context and info.context.get("replay"))
+
+
+# A deck has 52 cards, so no hand, threshold or bonus can sensibly exceed
+# it. The caps exist to keep a typo (or a hostile client) from producing
+# amounts that overflow the settlements column or never fit on screen.
+MAX_CARDS = 52
+MAX_CARD_VALUE_CENTS = 10_000
 
 
 class GameRules(BaseModel):
@@ -30,9 +47,22 @@ class GameRules(BaseModel):
     special_hand_cards: int = 5
 
     @model_validator(mode="after")
-    def _validate(self) -> GameRules:
+    def _validate(self, info: ValidationInfo) -> GameRules:
+        if is_replay(info):
+            return self
         if min(self.card_value_cents, self.base_cards, self.special_hand_cards) < 0:
             raise ValueError("Rule values can't be negative.")
+        if self.card_value_cents > MAX_CARD_VALUE_CENTS:
+            raise ValueError(f"card_value_cents can't exceed {MAX_CARD_VALUE_CENTS}.")
+        if max(self.base_cards, self.special_hand_cards) > MAX_CARDS:
+            raise ValueError(f"Card-count rules can't exceed {MAX_CARDS}.")
+        # A threshold of 0 would multiply every loser, which is never what
+        # anyone means by "double at N cards".
+        if (
+            not 1 <= self.double_threshold <= MAX_CARDS
+            or not 1 <= self.triple_threshold <= MAX_CARDS
+        ):
+            raise ValueError(f"Thresholds must be between 1 and {MAX_CARDS}.")
         if self.multipliers_enabled and self.triple_threshold < self.double_threshold:
             raise ValueError("triple_threshold must be >= double_threshold.")
         return self
@@ -79,6 +109,11 @@ class Transfer(BaseModel):
     amount_cents: int
     kind: TransferKind
     round_no: int
+    # Special-hand transfers only: the seq of the SPECIAL_HAND event that
+    # produced them, stamped at apply time. Lets an undo reverse exactly one
+    # claim even when claims in the same round billed different numbers of
+    # players (someone stepped out in between).
+    claim_seq: int | None = None
 
 
 class RoundPhase(StrEnum):

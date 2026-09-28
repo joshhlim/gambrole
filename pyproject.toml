@@ -20,4 +20,9 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["ignore::DeprecationWarning"]
+# Deprecations are shown (not hidden) so upcoming breakages surface, and our
+# own modules' deprecations fail the run outright. If a third-party library
+# gets noisy, add a targeted "ignore::DeprecationWarning:<module>" here.
+filterwarnings = [
+    "error::DeprecationWarning:(db|ui|game|taidi|taidi_core|mahjong_core|migrate_legacy_to_events)(\\.|$)",
+]

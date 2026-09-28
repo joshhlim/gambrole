@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/auth";
+import { supabase, wasPasswordRecovery } from "@/lib/auth";
 import { updatePassword } from "@/lib/account";
 
 const inputCls =
@@ -20,33 +20,40 @@ function CallbackInner() {
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const ran = useRef(false);
 
+  // No exchangeCodeForSession here: the Supabase client (PKCE,
+  // detectSessionInUrl) already swaps ?code= for a session while it
+  // initialises, and consumes the code verifier doing it — a second
+  // exchange from this page could only fail. So this just waits for that
+  // initialisation to finish and reads the outcome. Every step is
+  // idempotent (initialize() hands back the same promise), which also makes
+  // StrictMode's double-run harmless.
   useEffect(() => {
-    if (!supabase || !code || ran.current) return;
-    ran.current = true;
-
-    // Supabase fires PASSWORD_RECOVERY as part of processing the exchange
-    // below when this link came from a password-reset email — captured via
-    // a plain closure variable (not state) so it's readable synchronously
-    // once the exchange's promise resolves, no extra render needed.
-    let recovery = false;
-    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY") recovery = true;
+    if (!supabase || !code) return;
+    const client = supabase;
+    let cancelled = false;
+    const { data: sub } = client.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY" && !cancelled) setIsRecovery(true);
     });
-
-    supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
-      sub.subscription.unsubscribe();
-      if (error) {
-        setExchangeError(error.message);
-      } else if (recovery) {
+    (async () => {
+      const { error } = await client.auth.initialize();
+      // The client announces SIGNED_IN / PASSWORD_RECOVERY on a zero-delay
+      // timer after initialising; let it land before deciding.
+      await new Promise((r) => setTimeout(r, 0));
+      if (cancelled) return;
+      if (wasPasswordRecovery()) {
         setIsRecovery(true);
-      } else {
-        router.replace("/");
+        return;
       }
-    });
-
-    return () => sub.subscription.unsubscribe();
+      const { data } = await client.auth.getSession();
+      if (cancelled) return;
+      if (data.session) router.replace("/");
+      else setExchangeError(error?.message ?? "This link is missing or already used.");
+    })();
+    return () => {
+      cancelled = true;
+      sub.subscription.unsubscribe();
+    };
   }, [code, router]);
 
   async function handleSetPassword(e: React.FormEvent) {

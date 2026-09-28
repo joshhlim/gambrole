@@ -1,14 +1,14 @@
 """The room endpoints.
 
-`create`/`by_code`/`get_state` are generic — they work for a room of either
-game type, via events_store's AnyRoomState. Every other (mutating) endpoint
-here is scoped to Taidi specifically: it rebuilds the current TaidiRoomState
-from the event log (rejecting a Mahjong room with 400 via WrongGameType),
-hands the command to the matching taidi_core.machine function (which
-validates and returns event(s) without mutating anything), persists those
-events, and returns the freshly rebuilt state. See routers/mahjong.py for
-the equivalent Mahjong-scoped endpoints. MachineError subclasses map
-directly to HTTP status codes.
+`create`/`by_code`/`get_state`/`active` are generic — they work for a room of
+either game type, via events_store's AnyRoomState. Every other (mutating)
+endpoint here is scoped to Taidi specifically: it goes through
+dispatch.dispatch, which rebuilds the current TaidiRoomState from the event
+log (rejecting a Mahjong room with 400 via WrongGameType), hands the command
+to the matching taidi_core.machine function (which validates and returns
+event(s) without mutating anything), persists those events, and returns the
+freshly rebuilt state. See routers/mahjong.py for the equivalent Mahjong-
+scoped endpoints. MachineError subclasses map directly to HTTP status codes.
 """
 
 from __future__ import annotations
@@ -18,29 +18,31 @@ from typing import Any, NoReturn
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.exc import IntegrityError
+from mahjong_core.models import MahjongRules
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from taidi_core import machine
-from taidi_core.errors import IllegalTransition, NotAuthorized, SeqConflict
-from taidi_core.models import Event, RoomState
+from taidi_core.models import Event, GameRules, RoomState, RoomStatus
 
 from ..auth import CurrentUser, get_current_user
 from ..db import get_session
+from ..dispatch import dispatch, pinned_seq
 from ..events_store import (
     AlreadyInActiveRoom,
     AnyRoomState,
+    RoomMeta,
     RoomNotFound,
     WrongGameType,
-    append_events,
     create_room,
     ensure_no_other_active_room,
-    find_active_room,
-    rebuild_state_with_invite,
-    rebuild_taidi_state_with_invite,
+    find_active_room_state,
+    load_room,
     resolve_invite_code,
 )
+from ..ratelimit import rate_limit
 from ..schemas import (
     CreateRoomRequest,
+    RoundCommandRequest,
     SeqOnlyRequest,
     StartGameRequest,
     SubmitCardsRequest,
@@ -52,96 +54,64 @@ from ..users_service import ensure_user
 router = APIRouter(prefix="/rooms", tags=["rooms"])
 
 
-def _raise_for_already_active(e: AlreadyInActiveRoom) -> NoReturn:
+def raise_for_already_active(e: AlreadyInActiveRoom) -> NoReturn:
     raise HTTPException(
         status.HTTP_409_CONFLICT,
         {"message": str(e), "active_room_id": str(e.room_id)},
     ) from e
 
 
-async def _get_state_with_invite_or_404(
-    session: AsyncSession, room_id: UUID
-) -> tuple[AnyRoomState, str, str]:
+def room_json(state: AnyRoomState, meta: RoomMeta) -> dict[str, Any]:
+    return {
+        **state.model_dump(mode="json"),
+        "invite_code": meta.invite_code,
+        "game_type": meta.game_type,
+        "draft_rules": meta.draft_rules,
+    }
+
+
+def draft_rules_or_default[R: (GameRules, MahjongRules)](rules_type: type[R], meta: RoomMeta) -> R:
+    """The rules to start with when the host didn't send any: what was
+    picked on the create screen, else the defaults."""
+    if meta.draft_rules is None:
+        return rules_type()
     try:
-        return await rebuild_state_with_invite(session, room_id)
+        return rules_type.model_validate(meta.draft_rules)
+    except ValidationError as e:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "The rules saved with this room are no longer valid — send rules to start.",
+        ) from e
+
+
+async def _load_taidi(session: AsyncSession, room_id: UUID) -> tuple[RoomState, RoomMeta]:
+    try:
+        state, meta = await load_room(session, room_id)
     except RoomNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Room not found.") from e
+    if not isinstance(state, RoomState):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, str(WrongGameType(meta.game_type, "taidi"))
+        )
+    return state, meta
 
 
-async def _get_taidi_state_or_404(session: AsyncSession, room_id: UUID) -> tuple[RoomState, str]:
-    try:
-        return await rebuild_taidi_state_with_invite(session, room_id)
-    except RoomNotFound as e:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Room not found.") from e
-    except WrongGameType as e:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
-
-
-# Enough for every loser at a full table to submit in the same instant.
-_DISPATCH_ATTEMPTS = 5
-
-
-def _card_seq(state: RoomState, expected_seq: int, round_no: int | None) -> int:
-    """The seq a card submission is checked against.
-
-    Card counts from different players don't conflict — each fills in its
-    own slot of the round, and the machine already refuses a duplicate or a
-    round that isn't collecting. Holding them to the client's seq meant that
-    losers submitting together raced each other, and whoever lost the race
-    saw their submit bounce. So when the client names the round it's
-    answering, only that is checked, and the count lands on whatever seq the
-    room is at now. Without a round_no (an older client) the strict seq
-    check still applies.
-    """
-    if round_no is None:
-        return expected_seq
-    current = state.current_round
-    if current is None or current.round_no != round_no:
-        raise SeqConflict(expected=expected_seq, actual=state.seq)
-    return state.seq
-
-
-def _as_json(state: AnyRoomState, invite_code: str, game_type: str) -> dict[str, Any]:
-    return {**state.model_dump(mode="json"), "invite_code": invite_code, "game_type": game_type}
+def _round_seq(state: RoomState, expected_seq: int, round_no: int | None) -> int:
+    current = state.rounds[-1].round_no if state.rounds else None
+    return pinned_seq(expected_seq, round_no, current, state.seq)
 
 
 async def _dispatch(
-    session: AsyncSession,
-    room_id: UUID,
-    build_events: Callable[[RoomState], list[Event]],
+    session: AsyncSession, room_id: UUID, build_events: Callable[[RoomState], list[Event]]
 ) -> dict[str, Any]:
-    """Rebuild state, run one command against it, persist, and return the new state.
-
-    Retries on a genuine DB-level race (two requests computing the same
-    next seq); each retry rebuilds fresh state and re-validates, so it
-    either succeeds against the now-current state or raises a proper
-    MachineError instead of a raw integrity error. More than one retry
-    because card submissions pin to the server's seq (see _card_seq), so a
-    table's worth of losers all submitting at once can keep colliding.
-    """
-    for _attempt in range(_DISPATCH_ATTEMPTS):
-        state, invite_code = await _get_taidi_state_or_404(session, room_id)
-        try:
-            new_events = build_events(state)
-        except SeqConflict as e:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                {"message": str(e), "state": _as_json(state, invite_code, "taidi")},
-            ) from e
-        except NotAuthorized as e:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, str(e)) from e
-        except IllegalTransition as e:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
-
-        new_state = machine.fold(state, new_events)
-        try:
-            await append_events(session, room_id, new_events, final_state=new_state)
-        except IntegrityError:
-            continue  # someone else's event landed first — rebuild and retry
-
-        return _as_json(new_state, invite_code, "taidi")
-
-    raise HTTPException(status.HTTP_409_CONFLICT, "Too many concurrent updates — please retry.")
+    return await dispatch(
+        session,
+        room_id,
+        load=_load_taidi,
+        fold=machine.fold,
+        build_events=build_events,
+        as_json=room_json,
+    )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -150,20 +120,32 @@ async def create(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
+    draft: dict[str, Any] | None = None
+    if body.rules is not None:
+        rules_type: type[GameRules] | type[MahjongRules] = (
+            MahjongRules if body.game_type == "mahjong" else GameRules
+        )
+        try:
+            draft = rules_type.model_validate(body.rules).model_dump(mode="json")
+        except ValidationError as e:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                [{"loc": ["body", "rules", *err["loc"]], "msg": err["msg"]} for err in e.errors()],
+            ) from e
     await ensure_user(session, user)
-    room_id = uuid4()
     try:
-        state, invite_code, game_type = await create_room(
+        state, meta = await create_room(
             session,
-            room_id=room_id,
+            room_id=uuid4(),
             host_id=user.user_id,
             host_display_name=user.display_name,
             now=utcnow(),
             game_type=body.game_type,
+            draft_rules=draft,
         )
     except AlreadyInActiveRoom as e:
-        _raise_for_already_active(e)
-    return _as_json(state, invite_code, game_type)
+        raise_for_already_active(e)
+    return room_json(state, meta)
 
 
 @router.get("/active")
@@ -175,23 +157,26 @@ async def active(
     live game from a device that has never seen its URL (see the one-active-
     room rule in events_store.find_active_room). `room_id` is null when
     they're not in one."""
-    room_id = await find_active_room(session, user.user_id)
-    if room_id is None:
+    found = await find_active_room_state(session, user.user_id)
+    if found is None:
         return {"room_id": None}
-    state, invite_code, game_type = await rebuild_state_with_invite(session, room_id)
+    room_id, state, meta = found
     return {
         "room_id": str(room_id),
-        "invite_code": invite_code,
-        "game_type": game_type,
+        "invite_code": meta.invite_code,
+        "game_type": meta.game_type,
         "status": state.status.value,
     }
 
 
-@router.get("/by-code/{invite_code}")
+@router.get("/by-code/{invite_code}", dependencies=[Depends(rate_limit("by-code", 30))])
 async def by_code(invite_code: str, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
     """Also returns game_type so the client can route straight to the right
     room component instead of spending a second round trip just to find out
-    which one to render — see the room page's `g` query param."""
+    which one to render — see the room page's `g` query param.
+
+    Rate limited: invite codes are short enough to guess at, and a guessed
+    lobby is one anybody can join."""
     row = await resolve_invite_code(session, invite_code)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No room with that code.")
@@ -199,14 +184,29 @@ async def by_code(invite_code: str, session: AsyncSession = Depends(get_session)
     return {"room_id": str(room_id), "game_type": game_type}
 
 
+def can_view(state: AnyRoomState, user_id: UUID) -> bool:
+    """Lobbies are open to anyone holding the id — that's how joining by a
+    shared link works. Once a game starts, its balances are real money
+    results, so only the people who played (anyone holding a balance,
+    including someone who stepped out) and the host can see it."""
+    if state.status == RoomStatus.LOBBY:
+        return True
+    return user_id == state.host_id or user_id in state.balances
+
+
 @router.get("/{room_id}/state")
 async def get_state(
     room_id: UUID,
-    _user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    state, invite_code, game_type = await _get_state_with_invite_or_404(session, room_id)
-    return _as_json(state, invite_code, game_type)
+    try:
+        state, meta = await load_room(session, room_id)
+    except RoomNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Room not found.") from e
+    if not can_view(state, user.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You're not in this game.")
+    return room_json(state, meta)
 
 
 @router.post("/{room_id}/join")
@@ -219,7 +219,7 @@ async def join(
     try:
         await ensure_no_other_active_room(session, user.user_id, excluding_room_id=room_id)
     except AlreadyInActiveRoom as e:
-        _raise_for_already_active(e)
+        raise_for_already_active(e)
     return await _dispatch(
         session,
         room_id,
@@ -272,6 +272,8 @@ async def start(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
+    _state, meta = await _load_taidi(session, room_id)
+    rules = body.rules or draft_rules_or_default(GameRules, meta)
     return await _dispatch(
         session,
         room_id,
@@ -279,7 +281,7 @@ async def start(
             state,
             expected_seq=body.expected_seq,
             actor=user.user_id,
-            rules=body.rules,
+            rules=rules,
             now=utcnow(),
         ),
     )
@@ -288,7 +290,7 @@ async def start(
 @router.post("/{room_id}/win")
 async def win(
     room_id: UUID,
-    body: SeqOnlyRequest,
+    body: RoundCommandRequest,
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -296,7 +298,10 @@ async def win(
         session,
         room_id,
         lambda state: machine.claim_win(
-            state, expected_seq=body.expected_seq, actor=user.user_id, now=utcnow()
+            state,
+            expected_seq=_round_seq(state, body.expected_seq, body.round_no),
+            actor=user.user_id,
+            now=utcnow(),
         ),
     )
 
@@ -313,7 +318,7 @@ async def submit_cards(
         room_id,
         lambda state: machine.submit_cards(
             state,
-            expected_seq=_card_seq(state, body.expected_seq, body.round_no),
+            expected_seq=_round_seq(state, body.expected_seq, body.round_no),
             actor=user.user_id,
             cards=body.cards,
             now=utcnow(),
@@ -333,7 +338,7 @@ async def submit_for(
         room_id,
         lambda state: machine.submit_for(
             state,
-            expected_seq=_card_seq(state, body.expected_seq, body.round_no),
+            expected_seq=_round_seq(state, body.expected_seq, body.round_no),
             actor=user.user_id,
             target_player=body.target_player,
             cards=body.cards,
@@ -345,7 +350,7 @@ async def submit_for(
 @router.post("/{room_id}/special")
 async def special_hand(
     room_id: UUID,
-    body: SeqOnlyRequest,
+    body: RoundCommandRequest,
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -353,7 +358,10 @@ async def special_hand(
         session,
         room_id,
         lambda state: machine.add_special_hand(
-            state, expected_seq=body.expected_seq, actor=user.user_id, now=utcnow()
+            state,
+            expected_seq=_round_seq(state, body.expected_seq, body.round_no),
+            actor=user.user_id,
+            now=utcnow(),
         ),
     )
 
@@ -380,7 +388,7 @@ async def step_out(
 @router.post("/{room_id}/void-special")
 async def void_special(
     room_id: UUID,
-    body: SeqOnlyRequest,
+    body: RoundCommandRequest,
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -390,7 +398,10 @@ async def void_special(
         session,
         room_id,
         lambda state: machine.void_special_hand(
-            state, expected_seq=body.expected_seq, actor=user.user_id, now=utcnow()
+            state,
+            expected_seq=_round_seq(state, body.expected_seq, body.round_no),
+            actor=user.user_id,
+            now=utcnow(),
         ),
     )
 
@@ -398,7 +409,7 @@ async def void_special(
 @router.post("/{room_id}/void")
 async def void(
     room_id: UUID,
-    body: SeqOnlyRequest,
+    body: RoundCommandRequest,
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -406,7 +417,10 @@ async def void(
         session,
         room_id,
         lambda state: machine.void_last_round(
-            state, expected_seq=body.expected_seq, actor=user.user_id, now=utcnow()
+            state,
+            expected_seq=_round_seq(state, body.expected_seq, body.round_no),
+            actor=user.user_id,
+            now=utcnow(),
         ),
     )
 

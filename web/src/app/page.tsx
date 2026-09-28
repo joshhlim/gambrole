@@ -17,15 +17,20 @@ export default function HomePage() {
   // The way back into a live game from a device that never saw its URL —
   // e.g. picking up on a laptop after the phone died mid-game. Membership
   // lives on the account, not the device, so the seat is still there.
-  const [activeRoom, setActiveRoom] = useState<ActiveRoom | null>(null);
+  // Tagged with whose it is, so a different account signing in on this
+  // phone never sees the last one's rejoin button while its own loads.
+  const [active, setActive] = useState<{ userId: string; room: ActiveRoom } | null>(null);
+  const activeRoom = active && active.userId === user?.user_id ? active.room : null;
+  // Signup can succeed while claiming the username fails; the form that
+  // knows is gone by then (it unmounts on sign-in), so it reports here.
+  const [notice, setNotice] = useState<{ userId: string; text: string } | null>(null);
   useEffect(() => {
-    // No need to clear on sign-out: the button only renders in the
-    // signed-in branch, and signing back in refetches.
     if (!user) return;
+    const userId = user.user_id;
     let cancelled = false;
     api
       .activeRoom()
-      .then((r) => !cancelled && setActiveRoom(r))
+      .then((r) => !cancelled && setActive({ userId, room: r }))
       .catch(() => {
         /* a missing rejoin shortcut shouldn't break the home page */
       });
@@ -74,7 +79,9 @@ export default function HomePage() {
 
           {!user ? (
             supabase ? (
-              <SupabaseAuthForm onSignedIn={() => {}} />
+              <SupabaseAuthForm
+                onSignedIn={(u, text) => text && setNotice({ userId: u.user_id, text })}
+              />
             ) : (
               <form onSubmit={handleDevLogin} className="space-y-3">
                 <input
@@ -97,11 +104,16 @@ export default function HomePage() {
             )
           ) : (
             <div className="space-y-4">
+              {notice && notice.userId === user.user_id && (
+                <p data-testid="signin-notice" className="text-center text-sm text-muted">
+                  {notice.text}
+                </p>
+              )}
               {activeRoom?.room_id && (
                 <button
                   onClick={() =>
                     router.push(
-                      `/room/${activeRoom.room_id}?g=${activeRoom.game_type}`,
+                      `/room/${activeRoom.room_id}${activeRoom.game_type ? `?g=${activeRoom.game_type}` : ""}`,
                     )
                   }
                   data-testid="rejoin-room-btn"

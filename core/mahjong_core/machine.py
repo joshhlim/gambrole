@@ -32,7 +32,7 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from taidi_core.errors import IllegalTransition, NotAuthorized, SeqConflict
-from taidi_core.models import Member, RoomStatus
+from taidi_core.models import REPLAY, Member, RoomStatus
 
 from .models import (
     Declaration,
@@ -109,10 +109,22 @@ def _require_open_hand(state: RoomState) -> HandState:
 
 
 def _seat_player(state: RoomState, seat: int) -> UUID:
-    by_seat = state.member_ids_by_seat
-    if not 0 <= seat < len(by_seat):
-        raise IllegalTransition(f"No player in seat {seat}.")
-    return by_seat[seat]
+    # Looked up by the seat number itself, not by position in a seat-sorted
+    # list — the two only agree while seats are exactly 0-3.
+    if isinstance(seat, bool) or not isinstance(seat, int):
+        raise IllegalTransition("A seat is a number from 0 to 3.")
+    for pid, member in state.members.items():
+        if member.seat == seat:
+            return pid
+    raise IllegalTransition(f"No player in seat {seat}.")
+
+
+def _lowest_free_seat(members: dict[UUID, Member]) -> int:
+    """Seats can't just be len(members): after someone leaves the lobby that
+    number can already be taken, and two players in one seat means
+    declaring against a seat charges the wrong person."""
+    taken = {m.seat for m in members.values()}
+    return next(s for s in range(len(members) + 1) if s not in taken)
 
 
 # ============================================================
@@ -167,11 +179,16 @@ def assign_seats(
         raise IllegalTransition("Can't rearrange seats once the game has started.")
     if len(state.members) != SEAT_COUNT:
         raise IllegalTransition("Need exactly 4 players before assigning seats.")
-    if set(seat_map) != set(state.members) or sorted(seat_map.values()) != list(range(SEAT_COUNT)):
+    if not set(seat_map) <= set(state.members):
+        raise IllegalTransition("Can only seat players who are in the room.")
+    # A partial map (e.g. just the two players being swapped) is merged over
+    # the current seats; the event always records the full result.
+    merged = {pid: m.seat for pid, m in state.members.items()} | dict(seat_map)
+    if sorted(merged.values()) != list(range(SEAT_COUNT)):
         raise IllegalTransition(
             "Seat assignment must place each of the 4 players in a distinct seat 0-3."
         )
-    payload = {str(pid): seat for pid, seat in seat_map.items()}
+    payload = {str(pid): seat for pid, seat in merged.items()}
     return [
         _mk_event(
             state, EventType.SEATS_ASSIGNED, actor, payload, _now(now), expected_seq + 1, event_id
@@ -195,6 +212,8 @@ def start_game(
         raise IllegalTransition("Game already started.")
     if len(state.members) != SEAT_COUNT:
         raise IllegalTransition("Mahjong needs exactly 4 players to start.")
+    if sorted(m.seat for m in state.members.values()) != list(range(SEAT_COUNT)):
+        raise IllegalTransition("Every seat 0-3 needs exactly one player before starting.")
     payload = {"rules": rules.model_dump(mode="json")}
     return [
         _mk_event(
@@ -271,6 +290,8 @@ def declare_gang(
     assert state.rules is not None
     others = [p for p in state.member_ids_by_seat if p != actor]
 
+    if target != "angang" and (isinstance(target, bool) or not isinstance(target, int)):
+        raise IllegalTransition("A gang targets a seat or 'angang'.")
     if target == "angang":
         amount = gang_amount_angang(state.rules)
         transfers = [
@@ -329,8 +350,10 @@ def _plan_hand_close(hand: HandState, *, is_win: bool, should_rotate: bool) -> d
     `should_rotate` is the caller's job to compute: on a win it's "the
     dealer didn't win"; on a no-win it's "a gang happened this hand". The
     last seat of the last wind ignores it — only a WIN closes that cycle,
-    and a no-win there just repeats regardless of gangs."""
-    is_final_hand = hand.wind == MAX_WINDS and hand.dealer_seat == SEAT_COUNT - 1
+    and a no-win there just repeats regardless of gangs. Past wind 4 (the
+    host chose to continue) every wind's last seat is such a boundary, so
+    the host is asked again each time."""
+    is_final_hand = hand.wind >= MAX_WINDS and hand.dealer_seat == SEAT_COUNT - 1
 
     if is_final_hand:
         return {
@@ -494,6 +517,7 @@ def continue_wind(
     _check_seq(state, expected_seq)
     if actor != state.host_id:
         raise NotAuthorized("Only the host can continue past the last wind.")
+    _require_in_progress(state)
     if not state.pending_wind_decision:
         raise IllegalTransition("No wind decision is pending.")
     return [
@@ -601,6 +625,8 @@ def _apply_in_place(new: RoomState, event: Event) -> None:
     once per replay rather than once per event — a per-event deep copy of a
     state whose round history grows with every event made replay quadratic
     (a 100-round game took seconds to rebuild on every poll)."""
+    if event.room_id != new.room_id:
+        raise ValueError(f"Event {event.event_id} belongs to another room.")
     if event.seq != new.seq + 1:
         raise SeqConflict(expected=new.seq + 1, actual=event.seq)
 
@@ -612,7 +638,7 @@ def _apply_in_place(new: RoomState, event: Event) -> None:
             player_id=pid,
             display_name=event.payload["display_name"],
             is_guest=event.payload.get("is_guest", False),
-            seat=len(new.members),
+            seat=_lowest_free_seat(new.members),
         )
         new.balances[pid] = 0
 
@@ -621,7 +647,7 @@ def _apply_in_place(new: RoomState, event: Event) -> None:
             new.members[UUID(pid_str)].seat = seat
 
     elif event.type == EventType.GAME_STARTED:
-        new.rules = MahjongRules.model_validate(event.payload["rules"])
+        new.rules = MahjongRules.model_validate(event.payload["rules"], context=REPLAY)
         new.status = RoomStatus.IN_PROGRESS
         new.hands = [HandState(hand_no=1, wind=1, dealer_seat=0)]
 
@@ -674,6 +700,7 @@ def _apply_in_place(new: RoomState, event: Event) -> None:
     elif event.type == EventType.GAME_ENDED:
         new.status = RoomStatus.ENDED
         new.ended_at = event.created_at
+        new.pending_wind_decision = False
 
     elif event.type == EventType.PLAYER_LEFT:
         pid = UUID(event.payload["player_id"])

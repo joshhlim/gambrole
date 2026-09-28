@@ -3,15 +3,16 @@ back into a RoomState — either taidi_core's or mahjong_core's, depending on
 the room's stored game_type (see ADR-0006).
 
 The generic endpoints (create, get-state, by-code) work with either type via
-AnyRoomState. Each game's router narrows to its own concrete type via
-rebuild_taidi_state_with_invite / rebuild_mahjong_state_with_invite, which
-raise WrongGameType for a mismatch — e.g. calling a Mahjong action endpoint
-against a room created as Taidi.
+AnyRoomState. Each game's router narrows load_room's result to its own
+concrete type and answers WrongGameType for a mismatch — e.g. calling a
+Mahjong action endpoint against a room created as Taidi.
 """
 
 from __future__ import annotations
 
+import logging
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -41,6 +42,22 @@ from .money import MAHJONG_CHIP_VALUE_CENTS
 from .time import utcnow
 
 AnyRoomState = TaidiRoomState | MahjongRoomState
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RoomMeta:
+    """What a room's JSON needs besides its folded state: the parts of the
+    `rooms` row that aren't derivable from the event log."""
+
+    invite_code: str
+    game_type: str
+    # Rules picked on the create screen, applied when the host starts
+    # without sending any. Stored server-side so they survive the host's
+    # tab closing (they used to live only in that tab's sessionStorage).
+    draft_rules: dict[str, Any] | None
+
 
 # Written into a game_ended event's payload when the inactivity backstop
 # closed the game rather than a player. Read back by history/debts so a
@@ -90,12 +107,21 @@ async def find_active_room(session: AsyncSession, player_id: UUID) -> UUID | Non
     membership — and rebuilding also gives a stale room the chance to
     auto-close rather than block the player forever.
     """
-    as_host = select(rooms_table.c.room_id).where(
+    found = await find_active_room_state(session, player_id)
+    return found[0] if found else None
+
+
+async def find_active_room_state(
+    session: AsyncSession, player_id: UUID
+) -> tuple[UUID, AnyRoomState, RoomMeta] | None:
+    """find_active_room, also handing back the state it already folded so a
+    caller that wants it (GET /rooms/active) doesn't rebuild it again."""
+    as_host = select(rooms_table.c.room_id, rooms_table.c.status).where(
         rooms_table.c.host_id == player_id,
         rooms_table.c.status.in_(("lobby", "in_progress")),
     )
     as_participant = (
-        select(rooms_table.c.room_id)
+        select(rooms_table.c.room_id, rooms_table.c.status)
         .select_from(
             room_participants_table.join(
                 rooms_table, room_participants_table.c.room_id == rooms_table.c.room_id
@@ -108,21 +134,51 @@ async def find_active_room(session: AsyncSession, player_id: UUID) -> UUID | Non
     )
     candidates = (await session.execute(union(as_host, as_participant))).all()
     for candidate in candidates:
-        state, events, machine, _invite_code, _game_type = await _rebuild(
-            session, candidate.room_id
-        )
-        # The one spot the staleness backstop runs: a stale room's only real
-        # harm is locking its members out of starting another one, so close
-        # it exactly where that would happen. Keeping it out of the plain
-        # read path means browsing stats/debts/history never mutates a room,
-        # and a lobby can't disband while someone sits watching it poll.
-        state = await _maybe_close_stale_room(session, candidate.room_id, state, events, machine)
+        room_id = cast(UUID, candidate.room_id)
+        try:
+            state, meta = await _confirm_candidate(session, room_id, candidate.status)
+        except Exception:
+            # One room that can't be folded or closed must not lock its
+            # members out of creating or joining any other room forever.
+            logger.exception("Skipping active-room candidate %s", room_id)
+            await session.rollback()
+            continue
         if (
             state.status in (RoomStatus.LOBBY, RoomStatus.IN_PROGRESS)
             and player_id in state.members
         ):
-            return cast(UUID, candidate.room_id)
+            return room_id, state, meta
     return None
+
+
+async def _confirm_candidate(
+    session: AsyncSession, room_id: UUID, stored_status: str
+) -> tuple[AnyRoomState, RoomMeta]:
+    state, events, machine, meta = await _rebuild(session, room_id)
+    # The one spot the staleness backstop runs: a stale room's only real
+    # harm is locking its members out of starting another one, so close
+    # it exactly where that would happen. Keeping it out of the plain
+    # read path means browsing stats/debts/history never mutates a room,
+    # and a lobby can't disband while someone sits watching it poll.
+    try:
+        state = await _maybe_close_stale_room(session, room_id, state, events, machine)
+    except IntegrityError:
+        # Another member's request closed it first (append_events has
+        # already rolled back) — read what they wrote.
+        state, _events, _machine, meta = await _rebuild(session, room_id)
+
+    # rooms.status is a projection of the log (ADR-0007). Rooms from before
+    # that column existed all read 'lobby' until backfilled, so each one
+    # would be rebuilt here on every create/join forever — correct it once.
+    if state.status.value != stored_status:
+        values: dict[str, Any] = {"status": state.status.value}
+        if state.ended_at is not None:
+            values["ended_at"] = state.ended_at
+        await session.execute(
+            update(rooms_table).where(rooms_table.c.room_id == room_id).values(**values)
+        )
+        await session.commit()
+    return state, meta
 
 
 async def ensure_no_other_active_room(
@@ -147,7 +203,8 @@ async def create_room(
     host_display_name: str,
     now: datetime,
     game_type: str = "taidi",
-) -> tuple[AnyRoomState, str, str]:
+    draft_rules: dict[str, Any] | None = None,
+) -> tuple[AnyRoomState, RoomMeta]:
     await ensure_no_other_active_room(session, host_id)
     invite_code = generate_invite_code()
     await session.execute(
@@ -158,18 +215,20 @@ async def create_room(
             host_display_name=host_display_name,
             created_at=now,
             game_type=game_type,
+            draft_rules=draft_rules,
         )
     )
     await session.commit()
+    meta = RoomMeta(invite_code=invite_code, game_type=game_type, draft_rules=draft_rules)
     if game_type == "mahjong":
         mahjong_state = MahjongRoomState.new(
             room_id=room_id, host_id=host_id, host_display_name=host_display_name, now=now
         )
-        return mahjong_state, invite_code, game_type
+        return mahjong_state, meta
     taidi_state = TaidiRoomState.new(
         room_id=room_id, host_id=host_id, host_display_name=host_display_name, now=now
     )
-    return taidi_state, invite_code, game_type
+    return taidi_state, meta
 
 
 async def resolve_invite_code(session: AsyncSession, invite_code: str) -> tuple[UUID, str] | None:
@@ -283,11 +342,14 @@ async def rebuild_many(session: AsyncSession, room_ids: list[UUID]) -> dict[UUID
 
 async def _rebuild(
     session: AsyncSession, room_id: UUID
-) -> tuple[AnyRoomState, list[TaidiEvent] | list[MahjongEvent], Any, str, str]:
+) -> tuple[AnyRoomState, list[TaidiEvent] | list[MahjongEvent], Any, RoomMeta]:
     """Fold a room's event log, returning the raw events and the matching
     machine module alongside the state — so a caller that needs to act on
     the room (the staleness backstop) doesn't re-load or re-derive them."""
     seed = await _load_room_seed(session, room_id)
+    meta = RoomMeta(
+        invite_code=seed.invite_code, game_type=seed.game_type, draft_rules=seed.draft_rules
+    )
     if seed.game_type == "mahjong":
         mahjong_state = MahjongRoomState.new(
             room_id=seed.room_id,
@@ -300,8 +362,7 @@ async def _rebuild(
             mahjong_machine.fold(mahjong_state, mahjong_events),
             mahjong_events,
             mahjong_machine,
-            seed.invite_code,
-            seed.game_type,
+            meta,
         )
 
     taidi_state = TaidiRoomState.new(
@@ -315,8 +376,7 @@ async def _rebuild(
         taidi_machine.fold(taidi_state, taidi_events),
         taidi_events,
         taidi_machine,
-        seed.invite_code,
-        seed.game_type,
+        meta,
     )
 
 
@@ -395,33 +455,20 @@ async def rebuild_state_with_invite(
     session: AsyncSession, room_id: UUID
 ) -> tuple[AnyRoomState, str, str]:
     """Rebuilds whichever RoomState type matches the room's stored
-    game_type. Generic endpoints (get-state, create) use this directly;
-    each game's router narrows via rebuild_taidi_state_with_invite /
-    rebuild_mahjong_state_with_invite instead.
+    game_type. Used by the maintenance scripts; the routers use load_room.
 
     Pure: reading a room never writes to it. The staleness backstop lives in
     find_active_room instead, so polling a lobby can't disband it underfoot
     and opening /debts can't end someone else's game."""
-    state, _events, _machine, invite_code, game_type = await _rebuild(session, room_id)
-    return state, invite_code, game_type
+    state, _events, _machine, meta = await _rebuild(session, room_id)
+    return state, meta.invite_code, meta.game_type
 
 
-async def rebuild_taidi_state_with_invite(
-    session: AsyncSession, room_id: UUID
-) -> tuple[TaidiRoomState, str]:
-    state, invite_code, game_type = await rebuild_state_with_invite(session, room_id)
-    if not isinstance(state, TaidiRoomState):
-        raise WrongGameType(game_type, "taidi")
-    return state, invite_code
-
-
-async def rebuild_mahjong_state_with_invite(
-    session: AsyncSession, room_id: UUID
-) -> tuple[MahjongRoomState, str]:
-    state, invite_code, game_type = await rebuild_state_with_invite(session, room_id)
-    if not isinstance(state, MahjongRoomState):
-        raise WrongGameType(game_type, "mahjong")
-    return state, invite_code
+async def load_room(session: AsyncSession, room_id: UUID) -> tuple[AnyRoomState, RoomMeta]:
+    """Rebuild a room of either game type along with its RoomMeta. Pure, like
+    rebuild_state_with_invite. Raises RoomNotFound."""
+    state, _events, _machine, meta = await _rebuild(session, room_id)
+    return state, meta
 
 
 _ROOM_STATUS_BY_EVENT_TYPE = {

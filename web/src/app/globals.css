@@ -5,7 +5,9 @@
   --surface: #ffffff;
   --border: #e3dfd4;
   --foreground: #243328;
-  --muted: #8a8577;
+  /* Darkest it can go while still reading as secondary: ≥4.5:1 (WCAG AA)
+     on background, surface and the pale-gold highlight. */
+  --muted: #6f6a5d;
   --brand: #1e3a2f;
   --brand-strong: #1e6b4f;
   --gold: #d9b44a;
@@ -13,6 +15,9 @@
   /* A warmer, lighter gold for text on dark ground, where the base gold
      goes muddy. */
   --gold-bright: #eccd72;
+  /* Gold for small text on light ground (the HOST tag): the base gold
+     manages ~2:1 there; this keeps the hue at ≥4.5:1. */
+  --gold-text: #86691a;
 }
 
 @theme inline {
@@ -25,6 +30,7 @@
   --color-brand-strong: var(--brand-strong);
   --color-gold: var(--gold);
   --color-gold-bright: var(--gold-bright);
+  --color-gold-text: var(--gold-text);
   --color-danger: var(--danger);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
@@ -34,6 +40,18 @@
 body {
   background: var(--background);
   color: var(--foreground);
+}
+
+/* iOS Safari zooms the whole page into any field whose text is under
+   16px, and doesn't zoom back out. Unlayered so it outranks Tailwind's
+   text-sm on fields; the few deliberately larger fields keep their size. */
+input,
+select,
+textarea {
+  font-size: 16px;
+}
+input.text-lg {
+  font-size: 1.125rem;
 }
 
 /* Headings and the logo carry the personality; body copy stays on the

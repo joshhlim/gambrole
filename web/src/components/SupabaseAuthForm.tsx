@@ -10,7 +10,13 @@ type View = "login" | "signup" | "forgot";
 const inputCls =
   "w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm outline-none focus:border-brand-strong";
 
-export default function SupabaseAuthForm({ onSignedIn }: { onSignedIn: (user: CurrentUser) => void }) {
+export default function SupabaseAuthForm({
+  onSignedIn,
+}: {
+  /** `notice` is anything the person still needs to hear once signed in —
+   * this form unmounts the moment they are, so it can't show it itself. */
+  onSignedIn: (user: CurrentUser, notice?: string) => void;
+}) {
   const [view, setView] = useState<View>("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -116,16 +122,16 @@ export default function SupabaseAuthForm({ onSignedIn }: { onSignedIn: (user: Cu
         // Someone can still take it in the gap between the check and here.
         // Rare, but it must not pass silently: report it and send them to
         // Settings rather than pretending they got what they asked for.
+        let usernameNotice: string | undefined;
         try {
           await friendsApi.setUsername(wantedHandle);
         } catch (err) {
-          setNotice(
+          usernameNotice =
             err instanceof ApiError
               ? `${err.message} Pick another in Settings.`
-              : "Couldn't set that username — pick one in Settings.",
-          );
+              : "Couldn't set that username — pick one in Settings.";
         }
-        onSignedIn(auth.user);
+        onSignedIn(auth.user, usernameNotice);
       } else {
         // "Confirm email" is enabled on the project — account exists but
         // needs the confirmation link clicked before it can sign in.

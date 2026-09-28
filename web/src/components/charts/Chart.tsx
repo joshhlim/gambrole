@@ -5,7 +5,7 @@
 // saves. Interaction is deliberately pointer-based (not hover-only) so the
 // same code works under a finger and a mouse.
 
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type PointerEvent, type ReactNode } from "react";
 
 export const AXIS = "var(--border)";
 export const POS = "var(--brand-strong)";
@@ -15,19 +15,7 @@ export const NEG = "var(--danger)";
  * first is the "good"/most common case and later ones read as escalation. */
 export const SERIES = ["var(--brand-strong)", "var(--gold)", "var(--danger)", "var(--muted)"];
 
-export function moneyShort(cents: number): string {
-  const abs = Math.abs(cents) / 100;
-  const sign = cents < 0 ? "-" : "";
-  return abs >= 1000 ? `${sign}$${(abs / 1000).toFixed(1)}k` : `${sign}$${abs.toFixed(0)}`;
-}
-
-export function money(cents: number): string {
-  const sign = cents < 0 ? "-" : "";
-  return `${sign}$${(Math.abs(cents) / 100).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
+export { money, moneyShort } from "@/lib/format";
 
 export function shortDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -75,13 +63,36 @@ export function EmptyChart({ text }: { text: string }) {
 }
 
 /** Tracks which datum the pointer is over. Returns the index plus handlers to
- * spread onto each hit target. */
+ * spread onto each hit target.
+ *
+ * Touch has no hover, so a finger's tooltip stays up after it lifts (a
+ * touch pointer "leaves" the moment it's raised, which used to wipe the
+ * tooltip before it could be read). `activate` makes tappable charts
+ * two-step on touch: the first tap shows the tooltip, a second tap on the
+ * same point follows it. A mouse already saw the tooltip on hover, so its
+ * click goes straight through. */
 export function useHovered() {
   const [hovered, setHovered] = useState<number | null>(null);
+  const pointer = useRef<string>("mouse");
+  const armed = useRef<number | null>(null);
   const bind = (i: number) => ({
-    onPointerEnter: () => setHovered(i),
-    onPointerDown: () => setHovered(i),
-    onPointerLeave: () => setHovered((cur) => (cur === i ? null : cur)),
+    onPointerEnter: (e: PointerEvent<Element>) => {
+      if (e.pointerType !== "touch") setHovered(i);
+    },
+    onPointerDown: (e: PointerEvent<Element>) => {
+      pointer.current = e.pointerType;
+      armed.current = hovered === i ? i : null;
+      setHovered(i);
+    },
+    onPointerLeave: (e: PointerEvent<Element>) => {
+      if (e.pointerType !== "touch") setHovered((cur) => (cur === i ? null : cur));
+    },
   });
-  return { hovered, bind, clear: () => setHovered(null) };
+  const clear = (e: PointerEvent<Element>) => {
+    if (e.pointerType !== "touch") setHovered(null);
+  };
+  const activate = (i: number, go: () => void) => {
+    if (pointer.current !== "touch" || armed.current === i) go();
+  };
+  return { hovered, bind, clear, activate };
 }

@@ -1,183 +1,70 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ApiError } from "@/lib/api";
+import { chips } from "@/lib/format";
 import { mahjongApi } from "@/lib/mahjongApi";
-import { usePolling } from "@/lib/usePolling";
-import { readFreshState } from "@/lib/freshState";
-import { SEAT_LABELS, type HandState, type MahjongRoomState, type MahjongRules } from "@/lib/mahjongTypes";
-import type { Member } from "@/lib/types";
-
-/** Rules chosen on /new before the room existed — see TaidiRoom's identical
- * readStoredRules for why this can't just be sent at room-creation time. */
-function readStoredRules(roomId: string): Partial<MahjongRules> | undefined {
-  try {
-    const raw = sessionStorage.getItem(`gambrole_rules_${roomId}`);
-    return raw ? (JSON.parse(raw) as MahjongRules) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function chips(amount: number): string {
-  return amount.toLocaleString();
-}
+import { describeMahjongRules } from "@/lib/rulesSummary";
+import { SEAT_LABELS, type HandState, type MahjongRoomState } from "@/lib/mahjongTypes";
+import type { AnyRoomState, Member } from "@/lib/types";
+import { useRoom, type RunOptions } from "./useRoom";
+import { ConfirmAction, RoomFrame, RoomLoading, RoomProblem, RulesLine } from "./RoomShell";
 
 function seatLabel(seat: number) {
   return SEAT_LABELS[seat];
 }
+
+const narrow = (s: AnyRoomState) => (s.game_type === "mahjong" ? s : null);
+
+/** The hand a command is about: the last one as this device saw it. */
+const lastHandNo = (s: MahjongRoomState) => s.hands[s.hands.length - 1]?.hand_no ?? 0;
+
+type Run = (
+  action: (s: MahjongRoomState) => Promise<MahjongRoomState>,
+  opts?: RunOptions,
+) => Promise<MahjongRoomState | null>;
 
 /** seatsFromMe (see TableView) is [you, next, opposite, previous] — this
  * maps that order onto a diamond around the table: you at the bottom,
  * the next seat clockwise on your right, the previous seat on your left. */
 const SEAT_POSITIONS = ["bottom", "right", "top", "left"] as const;
 
-export default function MahjongRoom({ roomId, me }: { roomId: string; me: string }) {
+export default function MahjongRoom({
+  roomId,
+  me,
+  initial,
+  onWrongGame,
+}: {
+  roomId: string;
+  me: string;
+  initial: AnyRoomState | null;
+  onWrongGame: (actual: AnyRoomState) => void;
+}) {
   const router = useRouter();
-  const [banner, setBanner] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [confirmClose, setConfirmClose] = useState(false);
-  const [blockedBy, setBlockedBy] = useState<string | null>(null);
-  const joinedRef = useRef(false);
-
-  const { data: state, setData } = usePolling<MahjongRoomState>(
-    () => mahjongApi.getState(roomId),
-    1500,
-    [roomId, me],
-    readFreshState<MahjongRoomState>(roomId),
-  );
-
-  const isMember = !!(state && me in state.members);
-
-  useEffect(() => {
-    if (state?.status === "disbanded") router.replace("/");
-  }, [state?.status, router]);
-
-  useEffect(() => {
-    if (!state || joinedRef.current) return;
-    if (!isMember && state.status === "lobby") {
-      joinedRef.current = true;
-      mahjongApi
-        .join(roomId)
-        .then(setData)
-        .catch((e) => {
-          setBanner(e instanceof ApiError ? e.message : "Couldn't join this room.");
-          // See TaidiRoom: refused because you're already in another room.
-          const other = (e instanceof ApiError ? e.detail : null) as {
-            active_room_id?: string;
-          } | null;
-          if (other?.active_room_id) setBlockedBy(other.active_room_id);
-        });
-    }
-  }, [state, isMember, roomId, setData]);
-
-  /** See TaidiRoom's identical `run` for the retry-on-409 rationale. */
-  async function run<T>(action: (seq: number) => Promise<T>) {
-    setBusy(true);
-    setBanner(null);
-    let seq = state?.seq;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (seq === undefined) break;
-      try {
-        const result = await action(seq);
-        setBusy(false);
-        return result;
-      } catch (e) {
-        // ApiError.conflict is typed against Taidi's RoomState, but a
-        // Mahjong endpoint's 409 actually carries a MahjongRoomState.
-        if (e instanceof ApiError && e.conflict) {
-          const conflict = e.conflict as unknown as { state: MahjongRoomState };
-          setData(conflict.state);
-          seq = conflict.state.seq;
-          continue;
-        }
-        setBanner(e instanceof ApiError ? e.message : "Something went wrong.");
-        setBusy(false);
-        return null;
-      }
-    }
-    setBanner("Someone else keeps acting first — try again.");
-    setBusy(false);
-    return null;
-  }
+  const { state, problem, isMember, isHost, busy, banner, blockedBy, run } =
+    useRoom<MahjongRoomState>({
+      roomId,
+      me,
+      narrow,
+      join: useCallback((id: string) => mahjongApi.join(id), []),
+      initial,
+      onWrongGame,
+      movedOn: "That hand already moved on.",
+    });
 
   const membersBySeat = useMemo(
     () => (state ? Object.values(state.members).sort((a, b) => a.seat - b.seat) : []),
     [state],
   );
 
-  if (!state) {
-    return <main className="flex-1 flex items-center justify-center text-muted text-sm">Loading…</main>;
-  }
+  if (problem === "not-found" || problem === "forbidden") return <RoomProblem kind={problem} />;
+  if (!state) return <RoomLoading offline={problem === "offline"} />;
 
-  const isHost = state.host_id === me;
   const nameOf = (id: string) => state.members[id]?.display_name ?? "?";
-
-  /** See TaidiRoom's handleBack — identical semantics, mahjongApi instead. */
-  async function handleBack() {
-    if (state && state.status === "lobby" && isMember) {
-      if (isHost) {
-        if (membersBySeat.length > 1 && !confirmClose) {
-          setConfirmClose(true);
-          return;
-        }
-        if (!(await run((seq) => mahjongApi.disband(roomId, seq)))) return;
-      } else if (!(await run((seq) => mahjongApi.leave(roomId, seq)))) {
-        return;
-      }
-    }
-    router.push("/");
-  }
+  const rules = state.rules ?? state.draft_rules;
 
   return (
-    <main className="flex-1 px-5 py-8 max-w-md mx-auto w-full">
-      <div className="flex items-center gap-3 mb-6">
-        <button
-          onClick={handleBack}
-          disabled={busy}
-          data-testid="back-btn"
-          className="h-11 w-11 rounded-full border border-border flex items-center justify-center text-lg font-bold text-brand disabled:opacity-50"
-        >
-          ←
-        </button>
-        {confirmClose && (
-          <>
-            <span className="text-xs text-muted">Close the room for everyone?</span>
-            <button
-              onClick={handleBack}
-              disabled={busy}
-              data-testid="confirm-close-btn"
-              className="rounded-lg bg-danger px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-            >
-              Close
-            </button>
-            <button
-              onClick={() => setConfirmClose(false)}
-              data-testid="cancel-close-btn"
-              className="rounded-lg border border-border px-3 py-2 text-xs font-semibold text-muted"
-            >
-              Cancel
-            </button>
-          </>
-        )}
-      </div>
-
-      {banner && (
-        <div className="mb-4 rounded-lg border border-border bg-surface px-4 py-2 text-sm text-muted">
-          {banner}
-          {blockedBy && (
-            <button
-              onClick={() => router.push(`/room/${blockedBy}`)}
-              data-testid="go-to-active-room-btn"
-              className="mt-2 w-full rounded-lg bg-brand-strong py-2 text-xs font-semibold text-white"
-            >
-              Go to your game
-            </button>
-          )}
-        </div>
-      )}
-
+    <RoomFrame offline={problem === "offline"} banner={banner} blockedBy={blockedBy}>
       {state.status === "lobby" && (
         <Lobby
           state={state}
@@ -186,19 +73,20 @@ export default function MahjongRoom({ roomId, me }: { roomId: string; me: string
           canJoin={!blockedBy}
           membersBySeat={membersBySeat}
           busy={busy}
-          onJoin={() => run((_seq) => mahjongApi.join(roomId)).then((r) => r && setData(r))}
-          onStart={() =>
-            run((seq) => mahjongApi.start(roomId, seq, readStoredRules(roomId))).then(
-              (r) => r && setData(r),
+          rulesText={rules ? describeMahjongRules(rules) : null}
+          onJoin={() => run(() => mahjongApi.join(roomId))}
+          onStart={() => run((s) => mahjongApi.start(roomId, s.seq))}
+          onLeave={() =>
+            run((s) => mahjongApi.leave(roomId, s.seq), { apply: false }).then(
+              (r) => r && router.push("/"),
             )
           }
-          onLeave={() => run((seq) => mahjongApi.leave(roomId, seq)).then((r) => r && router.push("/"))}
           onDisband={() =>
-            run((seq) => mahjongApi.disband(roomId, seq)).then((r) => r && router.push("/"))
+            run((s) => mahjongApi.disband(roomId, s.seq), { apply: false }).then(
+              (r) => r && router.push("/"),
+            )
           }
-          onSwapSeats={(seatMap) =>
-            run((seq) => mahjongApi.assignSeats(roomId, seq, seatMap)).then((r) => r && setData(r))
-          }
+          onSwapSeats={(seatMap) => run((s) => mahjongApi.assignSeats(roomId, s.seq, seatMap))}
         />
       )}
 
@@ -207,10 +95,10 @@ export default function MahjongRoom({ roomId, me }: { roomId: string; me: string
           state={state}
           me={me}
           isHost={isHost}
+          isMember={isMember}
           busy={busy}
           run={run}
           roomId={roomId}
-          setData={setData}
         />
       )}
 
@@ -221,7 +109,7 @@ export default function MahjongRoom({ roomId, me }: { roomId: string; me: string
           onHome={() => router.push("/")}
         />
       )}
-    </main>
+    </RoomFrame>
   );
 }
 
@@ -232,6 +120,7 @@ function Lobby({
   canJoin,
   membersBySeat,
   busy,
+  rulesText,
   onJoin,
   onStart,
   onLeave,
@@ -244,6 +133,7 @@ function Lobby({
   canJoin: boolean;
   membersBySeat: Member[];
   busy: boolean;
+  rulesText: string | null;
   onJoin: () => void;
   onStart: () => void;
   onLeave: () => void;
@@ -279,6 +169,8 @@ function Lobby({
         </p>
       </div>
 
+      <RulesLine text={rulesText} />
+
       <div>
         <p className="text-xs uppercase tracking-widest text-muted mb-2">
           Players{canRearrange && " — tap two to swap seats"}
@@ -291,7 +183,7 @@ function Lobby({
                 key={m.player_id}
                 type="button"
                 onClick={() => tapSeat(m.player_id)}
-                disabled={!canRearrange}
+                disabled={!canRearrange || busy}
                 data-testid="lobby-member"
                 data-seat={m.seat}
                 className={`w-full flex items-center gap-3 rounded-xl border px-4 py-3 text-sm font-medium text-left ${
@@ -302,7 +194,9 @@ function Lobby({
                   {label.han} {label.pinyin}
                 </span>
                 <span className="flex-1">{m.display_name}</span>
-                {m.player_id === state.host_id && <span className="text-xs text-gold">HOST</span>}
+                {m.player_id === state.host_id && (
+                  <span className="text-xs font-semibold text-gold-text">HOST</span>
+                )}
               </button>
             );
           })}
@@ -377,27 +271,33 @@ function Lobby({
   );
 }
 
-type Action = "yao" | "gang" | "hu" | null;
+type Action = "yao" | "gang" | "hu";
 
 function TableView({
   state,
   me,
   isHost,
+  isMember,
   busy,
   run,
   roomId,
-  setData,
 }: {
   state: MahjongRoomState;
   me: string;
   isHost: boolean;
+  isMember: boolean;
   busy: boolean;
-  run: <T>(action: (seq: number) => Promise<T>) => Promise<T | null>;
+  run: Run;
   roomId: string;
-  setData: (s: MahjongRoomState) => void;
 }) {
-  const [action, setAction] = useState<Action>(null);
+  // A flow belongs to the hand it was opened on: its submit is pinned to
+  // that hand, and it closes by itself once the table has moved past it —
+  // a HU half-entered for hand 3 must never land on hand 4.
+  const [opened, setOpened] = useState<{ kind: Action; handNo: number } | null>(null);
   const hand = state.hands[state.hands.length - 1] as HandState | undefined;
+  const action = opened && opened.handNo === hand?.hand_no ? opened.kind : null;
+  const flowHand = opened?.handNo ?? 0;
+  const openFlow = (kind: Action) => hand && setOpened({ kind, handNo: hand.hand_no });
   const mySeat = state.members[me]?.seat ?? 0;
   const seatsFromMe = [0, 1, 2, 3].map((i) => (mySeat + i) % 4);
   const bySeat = useMemo(() => {
@@ -407,7 +307,7 @@ function TableView({
   }, [state.members]);
 
   function reset() {
-    setAction(null);
+    setOpened(null);
   }
 
   if (state.pending_wind_decision) {
@@ -416,9 +316,9 @@ function TableView({
         isHost={isHost}
         busy={busy}
         onContinue={() =>
-          run((seq) => mahjongApi.continueWind(roomId, seq)).then((r) => r && setData(r))
+          run((s) => mahjongApi.continueWind(roomId, s.seq, lastHandNo(s)), { pinned: true })
         }
-        onEnd={() => run((seq) => mahjongApi.endGame(roomId, seq)).then((r) => r && setData(r))}
+        onEnd={() => run((s) => mahjongApi.endGame(roomId, s.seq))}
       />
     );
   }
@@ -426,10 +326,14 @@ function TableView({
   return (
     <div className="space-y-6">
       {hand && (
+        // minmax(0, 1fr), not 1fr: a 1fr track won't shrink below its
+        // content, which is what pushed the diamond off a 320px screen.
+        // Every card is its column's width (capped), so all four stay the
+        // same size whatever the names.
         <div
           className="relative mx-auto grid w-full max-w-[22rem] items-center justify-items-center gap-2"
           style={{
-            gridTemplateColumns: "1fr 1fr 1fr",
+            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
             gridTemplateAreas: `". top ." "left center right" ". bottom ."`,
           }}
         >
@@ -447,14 +351,14 @@ function TableView({
                 data-testid="standing-row"
                 data-player={m.display_name}
                 data-dealer={isDealer}
-                className={`flex h-28 w-28 flex-col items-center justify-center gap-0.5 rounded-2xl border px-2 text-center text-xs ${
+                className={`flex aspect-square w-full max-w-28 min-w-0 flex-col items-center justify-center gap-0.5 rounded-2xl border px-1.5 text-center text-xs ${
                   isDealer ? "border-gold bg-[#FFF8E1]" : "border-border bg-surface"
                 }`}
               >
                 <span className="text-xs font-bold text-brand">
                   {label.han} {label.pinyin}
                 </span>
-                <span className="flex max-w-[6rem] items-baseline gap-1">
+                <span className="flex max-w-full items-baseline gap-1">
                   <span className="truncate font-medium">{m.display_name}</span>
                   {m.player_id === me && (
                     <span className="shrink-0 text-muted">(you)</span>
@@ -475,7 +379,8 @@ function TableView({
             data-testid="dealer-seat"
             data-wind={hand.wind}
             data-dealer-seat={hand.dealer_seat}
-            className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-gold bg-[#FFF8E1]"
+            data-hand={hand.hand_no}
+            className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-gold bg-[#FFF8E1] min-[390px]:h-16 min-[390px]:w-16"
           >
             <span className="text-lg font-extrabold text-brand">
               {seatLabel((hand.wind - 1) % 4).han}
@@ -485,10 +390,13 @@ function TableView({
         </div>
       )}
 
-      {action === null && (
+      {state.rules && <RulesLine text={describeMahjongRules(state.rules)} />}
+
+      {/* Watching without a seat: the table, but nothing to press. */}
+      {isMember && action === null && (
         <div className="space-y-3">
           <button
-            onClick={() => setAction("yao")}
+            onClick={() => openFlow("yao")}
             disabled={busy}
             data-testid="yao-btn"
             className="w-full rounded-xl bg-brand py-4 text-base font-bold text-white disabled:opacity-50"
@@ -496,7 +404,7 @@ function TableView({
             咬 YAO
           </button>
           <button
-            onClick={() => setAction("gang")}
+            onClick={() => openFlow("gang")}
             disabled={busy}
             data-testid="gang-btn"
             className="w-full rounded-xl bg-brand py-4 text-base font-bold text-white disabled:opacity-50"
@@ -504,68 +412,68 @@ function TableView({
             槓 GANG
           </button>
           <button
-            onClick={() => setAction("hu")}
+            onClick={() => openFlow("hu")}
             disabled={busy}
             data-testid="hu-btn"
             className="w-full rounded-xl bg-brand py-4 text-base font-bold text-white disabled:opacity-50"
           >
             胡了 HU LE
           </button>
-          <button
-            onClick={() => run((seq) => mahjongApi.declareNoWin(roomId, seq)).then((r) => r && setData(r))}
-            disabled={busy}
-            data-testid="no-win-btn"
-            className="w-full rounded-xl border border-border py-3 text-sm font-semibold text-brand disabled:opacity-50"
-          >
-            No Win
-          </button>
+          {/* Closes the hand and can pass the deal on, with no undo — so
+              it asks first, like End. */}
+          <ConfirmAction
+            label="No Win"
+            prompt="Close this hand with no winner?"
+            confirmLabel="No win"
+            testIds={{ open: "no-win-btn", confirm: "confirm-no-win-btn", cancel: "cancel-no-win-btn" }}
+            busy={busy}
+            onConfirm={() =>
+              run((s) => mahjongApi.declareNoWin(roomId, s.seq, lastHandNo(s)), { pinned: true })
+            }
+            buttonClassName="w-full rounded-xl border border-border py-3 text-sm font-semibold text-brand disabled:opacity-50"
+          />
           {isHost && (
-            <button
-              onClick={() => run((seq) => mahjongApi.endGame(roomId, seq)).then((r) => r && setData(r))}
-              disabled={busy}
-              data-testid="end-game-btn"
-              className="w-full rounded-xl border border-border py-2.5 text-xs font-semibold text-muted disabled:opacity-50"
-            >
-              End Game Now
-            </button>
+            <ConfirmAction
+              label="End Game Now"
+              prompt="End the game and settle up? This can't be undone."
+              confirmLabel="End & settle"
+              testIds={{ open: "end-game-btn", confirm: "confirm-end-btn", cancel: "cancel-end-btn" }}
+              busy={busy}
+              onConfirm={() => run((s) => mahjongApi.endGame(roomId, s.seq))}
+              buttonClassName="w-full rounded-xl border border-border py-2.5 text-xs font-semibold text-muted disabled:opacity-50"
+            />
           )}
         </div>
       )}
 
-      {action === "yao" && (
+      {isMember && action === "yao" && (
         <YaoFlow
           me={me}
           bySeat={bySeat}
           busy={busy}
           onCancel={reset}
           onSubmit={(targetSeat, an) =>
-            run((seq) => mahjongApi.declareYao(roomId, seq, targetSeat, an)).then((r) => {
-              if (r) {
-                setData(r);
-                reset();
-              }
-            })
+            run((s) => mahjongApi.declareYao(roomId, s.seq, flowHand, targetSeat, an), {
+              pinned: true,
+            }).then((r) => r && reset())
           }
         />
       )}
 
-      {action === "gang" && (
+      {isMember && action === "gang" && (
         <GangFlow
           bySeat={bySeat}
           busy={busy}
           onCancel={reset}
           onSubmit={(target) =>
-            run((seq) => mahjongApi.declareGang(roomId, seq, target)).then((r) => {
-              if (r) {
-                setData(r);
-                reset();
-              }
-            })
+            run((s) => mahjongApi.declareGang(roomId, s.seq, flowHand, target), {
+              pinned: true,
+            }).then((r) => r && reset())
           }
         />
       )}
 
-      {action === "hu" && (
+      {isMember && action === "hu" && (
         <HuFlow
           me={me}
           bySeat={bySeat}
@@ -573,14 +481,20 @@ function TableView({
           maxTai={state.rules?.max_tai ?? 10}
           onCancel={reset}
           onSubmit={(mode, targetSeat, tai, zimoBonus, klppdd) =>
-            run((seq) =>
-              mahjongApi.declareHu(roomId, seq, mode, targetSeat, tai, zimoBonus, klppdd),
-            ).then((r) => {
-              if (r) {
-                setData(r);
-                reset();
-              }
-            })
+            run(
+              (s) =>
+                mahjongApi.declareHu(
+                  roomId,
+                  s.seq,
+                  flowHand,
+                  mode,
+                  targetSeat,
+                  tai,
+                  zimoBonus,
+                  klppdd,
+                ),
+              { pinned: true },
+            ).then((r) => r && reset())
           }
         />
       )}
@@ -588,13 +502,18 @@ function TableView({
   );
 }
 
+/** `busy` matters here: in GangFlow a seat tap *is* the submit, so an
+ * enabled seat button during a request is a double charge waiting to
+ * happen. */
 function PlayerPicker({
   bySeat,
   exclude,
+  busy,
   onPick,
 }: {
   bySeat: (Member | undefined)[];
   exclude?: number;
+  busy: boolean;
   onPick: (seat: number) => void;
 }) {
   return (
@@ -608,11 +527,12 @@ function PlayerPicker({
             key={seat}
             type="button"
             onClick={() => onPick(seat)}
+            disabled={busy}
             data-testid={`pick-seat-${seat}`}
-            className="rounded-xl border border-border bg-surface px-3 py-4 text-sm font-semibold"
+            className="min-w-0 rounded-xl border border-border bg-surface px-3 py-4 text-sm font-semibold disabled:opacity-50"
           >
             <div className="text-brand">{label.han} {label.pinyin}</div>
-            <div className="text-xs text-muted mt-0.5">{m?.display_name ?? "?"}</div>
+            <div className="mt-0.5 truncate text-xs text-muted">{m?.display_name ?? "?"}</div>
           </button>
         );
       })}
@@ -652,7 +572,7 @@ function YaoFlow({
     return (
       <div className="space-y-3">
         <p className="text-center text-sm text-muted">咬 Who are you biting?</p>
-        <PlayerPicker bySeat={bySeat} onPick={setTargetSeat} />
+        <PlayerPicker bySeat={bySeat} busy={busy} onPick={setTargetSeat} />
         <CancelButton onCancel={onCancel} />
       </div>
     );
@@ -700,12 +620,12 @@ function GangFlow({
   return (
     <div className="space-y-3">
       <p className="text-center text-sm text-muted">槓 Who gangs?</p>
-      <PlayerPicker bySeat={bySeat} onPick={onSubmit} />
+      <PlayerPicker bySeat={bySeat} busy={busy} onPick={onSubmit} />
       <button
         onClick={() => onSubmit("angang")}
         disabled={busy}
         data-testid="pick-angang"
-        className="w-full rounded-xl border border-brand-strong bg-surface px-3 py-3 text-sm font-semibold text-brand"
+        className="w-full rounded-xl border border-brand-strong bg-surface px-3 py-3 text-sm font-semibold text-brand disabled:opacity-50"
       >
         暗槓 ANGANG
       </button>
@@ -757,6 +677,7 @@ function HuFlow({
         </button>
         <PlayerPicker
           bySeat={bySeat}
+          busy={busy}
           onPick={(seat) => {
             const isSelf = bySeat[seat]?.player_id === me;
             setMode(isSelf ? "zimo" : "direct");
@@ -776,6 +697,7 @@ function HuFlow({
         <PlayerPicker
           bySeat={bySeat}
           exclude={mySeat}
+          busy={busy}
           onPick={(seat) => {
             setMode("bao");
             setTargetSeat(seat);
@@ -799,7 +721,7 @@ function HuFlow({
           type="button"
           onClick={() => setTai((t) => Math.max(1, t - 1))}
           data-testid="tai-minus"
-          className="h-11 w-11 rounded-full border border-border text-lg font-bold text-brand"
+          className="h-12 w-12 rounded-full border border-border text-lg font-bold text-brand"
         >
           −
         </button>
@@ -811,7 +733,7 @@ function HuFlow({
           type="button"
           onClick={() => setTai((t) => Math.min(maxTai, t + 1))}
           data-testid="tai-plus"
-          className="h-11 w-11 rounded-full border border-border text-lg font-bold text-brand"
+          className="h-12 w-12 rounded-full border border-border text-lg font-bold text-brand"
         >
           +
         </button>
@@ -881,14 +803,15 @@ function WindDecisionView({
           >
             Continue
           </button>
-          <button
-            onClick={onEnd}
-            disabled={busy}
-            data-testid="end-game-btn"
-            className="w-full rounded-xl border border-border py-3 text-sm font-semibold text-muted disabled:opacity-50"
-          >
-            End Game
-          </button>
+          <ConfirmAction
+            label="End Game"
+            prompt="End the game and settle up? This can't be undone."
+            confirmLabel="End & settle"
+            testIds={{ open: "end-game-btn", confirm: "confirm-end-btn", cancel: "cancel-end-btn" }}
+            busy={busy}
+            onConfirm={onEnd}
+            buttonClassName="w-full rounded-xl border border-border py-3 text-sm font-semibold text-muted disabled:opacity-50"
+          />
         </div>
       ) : (
         <p className="text-sm text-muted">Waiting for the host to continue or end the game…</p>

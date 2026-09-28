@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { request } from "@/lib/api";
 import { signOut, useStoredUser } from "@/lib/auth";
 import { friendsApi } from "@/lib/friendsApi";
+import { money } from "@/lib/format";
 import type { MyProfile } from "@/lib/friendsTypes";
 
 interface Notification {
@@ -21,11 +22,6 @@ function who(n: Notification): string {
   return n.counterparty_username
     ? `@${n.counterparty_username}`
     : n.counterparty;
-}
-
-function money(cents: number): string {
-  const sign = cents < 0 ? "-" : "";
-  return `${sign}$${(Math.abs(cents) / 100).toFixed(2)}`;
 }
 
 function describe(n: Notification): string {
@@ -138,14 +134,51 @@ export default function TopBar() {
   const router = useRouter();
   const pathname = usePathname();
   const { user, checked } = useStoredUser();
-  const [profile, setProfile] = useState<MyProfile | null>(null);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  // Tagged with whose they are: the bar outlives sign-out and account
+  // switches, and must never show one account's handle or debts to the
+  // next person signing in on the same phone.
+  const [loaded, setLoaded] = useState<{
+    userId: string;
+    profile: MyProfile;
+    notifications: Notification[];
+  } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
-  const fetchedAt = useRef(0);
+  const fetched = useRef<{ userId: string; at: number } | null>(null);
   const [scrolled, setScrolled] = useState(false);
   const menuRef = useDismiss(menuOpen, () => setMenuOpen(false));
   const bellRef = useDismiss(bellOpen, () => setBellOpen(false));
+  const accountBtnRef = useRef<HTMLButtonElement>(null);
+  const menuPanelRef = useRef<HTMLDivElement>(null);
+
+  // A menu opened from the keyboard should be usable from the keyboard:
+  // focus lands on its first item, arrows move, Escape hands focus back.
+  useEffect(() => {
+    if (menuOpen) menuPanelRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }, [menuOpen]);
+
+  function onMenuKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    const items = Array.from(
+      e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    );
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    const move = (i: number) => {
+      e.preventDefault();
+      items[(i + items.length) % items.length]?.focus();
+    };
+    if (e.key === "ArrowDown") move(at + 1);
+    else if (e.key === "ArrowUp") move(at - 1);
+    else if (e.key === "Home") move(0);
+    else if (e.key === "End") move(items.length - 1);
+    else if (e.key === "Escape") {
+      setMenuOpen(false);
+      accountBtnRef.current?.focus();
+    }
+  }
+
+  const mine = loaded && user && loaded.userId === user.user_id ? loaded : null;
+  const profile = mine?.profile ?? null;
+  const notifications = mine?.notifications ?? [];
 
   // The bar lives in the layout and never unmounts, so unlike a per-page
   // component it can't rely on remounting to refresh. Re-check on each
@@ -153,8 +186,12 @@ export default function TopBar() {
   // slightly late badge is much cheaper than a request per hop.
   useEffect(() => {
     if (!user) return;
-    if (Date.now() - fetchedAt.current < BELL_TTL_MS) return;
-    fetchedAt.current = Date.now();
+    const userId = user.user_id;
+    // The TTL only applies to the same account — a different one signing
+    // in fetches straight away.
+    const last = fetched.current;
+    if (last && last.userId === userId && Date.now() - last.at < BELL_TTL_MS) return;
+    fetched.current = { userId, at: Date.now() };
     let cancelled = false;
     // One request for the bell rather than asking /debts and /friends
     // separately — see notifications_service.
@@ -164,8 +201,7 @@ export default function TopBar() {
     ])
       .then(([me, bell]) => {
         if (cancelled) return;
-        setProfile(me);
-        setNotifications(bell.items);
+        setLoaded({ userId, profile: me, notifications: bell.items });
       })
       .catch(() => {
         /* the page below works fine without a top bar */
@@ -225,6 +261,9 @@ export default function TopBar() {
                 setMenuOpen(false);
               }}
               data-testid="bell-btn"
+              aria-haspopup="true"
+              aria-expanded={bellOpen}
+              aria-controls="bell-panel"
               aria-label={`Notifications${notifications.length ? `, ${notifications.length} pending` : ""}`}
               className="relative flex h-10 w-10 items-center justify-center"
             >
@@ -239,7 +278,7 @@ export default function TopBar() {
               )}
             </button>
             {bellOpen && (
-              <div className={panel} data-testid="bell-panel">
+              <div id="bell-panel" className={panel} data-testid="bell-panel">
                 {notifications.length === 0 ? (
                   <p className="px-4 py-3 text-sm text-muted">
                     Nothing needs you right now.
@@ -262,11 +301,15 @@ export default function TopBar() {
 
           <div ref={menuRef}>
             <button
+              ref={accountBtnRef}
               onClick={() => {
                 setMenuOpen(!menuOpen);
                 setBellOpen(false);
               }}
               data-testid="account-btn"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              aria-controls="account-menu"
               className="flex h-10 items-center gap-1 pl-1 text-brand"
             >
               <span
@@ -280,10 +323,18 @@ export default function TopBar() {
               <ChevronIcon />
             </button>
             {menuOpen && (
-              <div className={panel} data-testid="account-menu">
+              <div
+                id="account-menu"
+                ref={menuPanelRef}
+                role="menu"
+                className={panel}
+                data-testid="account-menu"
+                onKeyDown={onMenuKey}
+              >
                 <button
                   onClick={() => go("/stats")}
                   data-testid="menu-stats"
+                  role="menuitem"
                   className={item}
                 >
                   My Stats
@@ -291,6 +342,7 @@ export default function TopBar() {
                 <button
                   onClick={() => go("/history")}
                   data-testid="menu-games"
+                  role="menuitem"
                   className={item}
                 >
                   My Games
@@ -298,6 +350,7 @@ export default function TopBar() {
                 <button
                   onClick={() => go("/debts")}
                   data-testid="menu-debts"
+                  role="menuitem"
                   className={item}
                 >
                   My Debts
@@ -305,6 +358,7 @@ export default function TopBar() {
                 <button
                   onClick={() => go("/settings")}
                   data-testid="menu-settings"
+                  role="menuitem"
                   className={item}
                 >
                   Settings
@@ -313,6 +367,8 @@ export default function TopBar() {
                   onClick={async () => {
                     await signOut();
                     setMenuOpen(false);
+                    setLoaded(null);
+                    fetched.current = null;
                     // signOut announces itself (see lib/auth.ts), so this
                     // bar and the home page both drop the session on their
                     // own — no reload needed to clear a component that
@@ -320,6 +376,7 @@ export default function TopBar() {
                     router.push("/");
                   }}
                   data-testid="menu-sign-out"
+                  role="menuitem"
                   className={`${item} border-t border-border text-muted`}
                 >
                   Sign out

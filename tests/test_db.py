@@ -123,3 +123,9 @@ def test_libsql_driver_backend(tmp_path, monkeypatch):
     assert "Alicia" in db.game_load("g1")["tracker"]["balances"]
     db.factory_reset()
     assert db.player_names() == []
+
+
+def test_refuses_remote_turso_under_pytest(monkeypatch):
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://example.turso.io")
+    with pytest.raises(RuntimeError, match="Turso"):
+        db.player_names()

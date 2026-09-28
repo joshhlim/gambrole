@@ -8,6 +8,12 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
+  // One at a time: every test drives 2-5 "devices" polling a single
+  // `next dev` server, and in parallel the first-visit route compiles and
+  // polling pile up until multi-device flows time out. Serial is ~3 min.
+  workers: 1,
+  // A four-device game with 1.5s polling legitimately takes 20-40s.
+  timeout: 90_000,
   retries: 0,
   reporter: "list",
   use: {
@@ -21,6 +27,9 @@ export default defineConfig({
       // (the repo's .venv locally; the CI runner's own install in CI).
       // Activate .venv before running this locally — see web/README.md.
       command: "cd ../api && python -m uvicorn app.main:app --port 8000",
+      // The API refuses to start without an auth mode; the suite signs in
+      // through dev-login. Merged over the inherited environment.
+      env: { TAIDI_AUTH_MODE: "dev" },
       url: "http://localhost:8000/healthz",
       reuseExistingServer: false,
       timeout: 30_000,

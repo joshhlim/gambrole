@@ -20,6 +20,7 @@ from uuid import UUID
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import CurrentUser
@@ -31,13 +32,15 @@ USERNAME_HELP = "3-24 characters, letters, numbers and underscores only."
 _NOT_ALLOWED = re.compile(r"[^a-z0-9_]+")
 
 
-def suggest_username(email: str | None, display_name: str) -> str:
+def suggest_username(display_name: str) -> str:
     """A reasonable handle to start someone off with.
 
     Everyone gets one automatically so the app never has to deal with a
     player who has no handle — they can change it in Settings. Built from
-    the local part of the address, falling back to the display name."""
-    for source in ((email or "").split("@")[0], display_name, "player"):
+    the display name, never the email address: handles are public, and one
+    made from an address's local part half-discloses the address (and lets
+    anyone confirm a guess at it via exact-email search)."""
+    for source in (display_name, "player"):
         base = _NOT_ALLOWED.sub("", source.strip().lower())[:24]
         if len(base) >= 3:
             return base
@@ -55,12 +58,17 @@ async def assign_username(session: AsyncSession, user_id: UUID, base: str) -> st
             )
         ).first()
         if taken is None:
-            await session.execute(
-                users_table.update()
-                .where(users_table.c.user_id == user_id)
-                .values(username=candidate, updated_at=utcnow())
-            )
-            await session.commit()
+            try:
+                await session.execute(
+                    users_table.update()
+                    .where(users_table.c.user_id == user_id)
+                    .values(username=candidate, updated_at=utcnow())
+                )
+                await session.commit()
+            except IntegrityError:
+                # Someone claimed it between the check and the write.
+                await session.rollback()
+                continue
             return candidate
     # 50 collisions on one base is not a real scenario, but never crash a
     # sign-in over a cosmetic field.
@@ -126,9 +134,7 @@ async def ensure_user(session: AsyncSession, user: CurrentUser) -> None:
     # Give anyone without a handle one now, so no screen ever has to cope
     # with a player who hasn't got one. Happens once per person.
     if row is not None and not row.username:
-        await assign_username(
-            session, user.user_id, suggest_username(user.email, user.display_name)
-        )
+        await assign_username(session, user.user_id, suggest_username(user.display_name))
 
 
 async def get_profile(session: AsyncSession, user_id: UUID) -> MyProfile | None:
@@ -183,12 +189,17 @@ async def set_username(session: AsyncSession, user_id: UUID, raw: str) -> str:
     if await username_taken(session, username, ignoring=user_id):
         raise UsernameTaken(f"@{username} is already taken.")
 
-    await session.execute(
-        users_table.update()
-        .where(users_table.c.user_id == user_id)
-        .values(username=username, updated_at=utcnow())
-    )
-    await session.commit()
+    try:
+        await session.execute(
+            users_table.update()
+            .where(users_table.c.user_id == user_id)
+            .values(username=username, updated_at=utcnow())
+        )
+        await session.commit()
+    except IntegrityError as e:
+        # Claimed by someone else between the check and the write.
+        await session.rollback()
+        raise UsernameTaken(f"@{username} is already taken.") from e
     return username
 
 

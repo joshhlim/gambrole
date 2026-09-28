@@ -1,17 +1,22 @@
 "use client";
 
-import { getStoredAuth } from "./auth";
-import type { ActiveRoom, GameRules, GameType, RoomState } from "./types";
+import { getAccessToken, refreshAccessToken } from "./auth";
+import { API_URL, API_URL_MISSING } from "./config";
+import type { MahjongRules } from "./mahjongTypes";
+import type { ActiveRoom, AnyRoomState, GameRules, GameType, TaidiRoomState } from "./types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+/** Long enough for a cold API on a bad table-side connection; short enough
+ * that a dead request can't leave every button on the page disabled. */
+const TIMEOUT_MS = 12_000;
 
 /** A 409 carries {message, state} so the caller can resync without a refetch. */
 export interface ConflictDetail {
   message: string;
-  state: RoomState;
+  state: AnyRoomState;
 }
 
 export class ApiError extends Error {
+  /** 0 when the request never got an HTTP answer (offline, timed out). */
   status: number;
   detail: unknown;
 
@@ -25,6 +30,8 @@ export class ApiError extends Error {
     this.detail = detail;
   }
 
+  /** Which game's state a 409 carries is only known from its game_type, so
+   * callers narrow it there rather than trusting the endpoint they hit. */
   get conflict(): ConflictDetail | null {
     // Not every 409 carries a state (e.g. "already in another room", or the
     // server running out of retries) — callers resync from it, so only
@@ -34,16 +41,35 @@ export class ApiError extends Error {
   }
 }
 
+async function send(path: string, options: RequestInit, token: string | null): Promise<Response> {
+  try {
+    return await fetch(`${API_URL}${path}`, {
+      ...options,
+      signal: options.signal ?? AbortSignal.timeout(TIMEOUT_MS),
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    });
+  } catch (e) {
+    const timedOut = e instanceof DOMException && e.name === "TimeoutError";
+    throw new ApiError(
+      0,
+      timedOut ? "The server took too long to answer — try again." : "Can't reach the server.",
+    );
+  }
+}
+
 export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const auth = getStoredAuth();
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(auth ? { Authorization: `Bearer ${auth.token}` } : {}),
-      ...options.headers,
-    },
-  });
+  if (!API_URL) throw new ApiError(0, API_URL_MISSING);
+  let res = await send(path, options, await getAccessToken());
+  // A token can expire between being read and arriving. One refresh and
+  // retry covers that; a second 401 is a real sign-in problem.
+  if (res.status === 401) {
+    const fresh = await refreshAccessToken();
+    if (fresh) res = await send(path, options, fresh);
+  }
   if (!res.ok) {
     let detail: unknown = res.statusText;
     try {
@@ -60,25 +86,33 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
 export const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: "POST", body: JSON.stringify(body ?? {}) });
 
+type Room = TaidiRoomState;
+
 export const api = {
-  createRoom: (gameType: GameType = "taidi") => post<RoomState>("/rooms", { game_type: gameType }),
+  /** Rules ride along from /new and are held as the room's draft_rules
+   * until the host starts it. */
+  createRoom: (gameType: GameType, rules?: GameRules | MahjongRules) =>
+    post<AnyRoomState>("/rooms", { game_type: gameType, ...(rules ? { rules } : {}) }),
   byCode: (code: string) =>
     request<{ room_id: string; game_type: GameType }>(`/rooms/by-code/${code}`),
   activeRoom: () => request<ActiveRoom>("/rooms/active"),
-  getState: (roomId: string) => request<RoomState>(`/rooms/${roomId}/state`),
-  join: (roomId: string) => post<RoomState>(`/rooms/${roomId}/join`),
+  /** Either game — the state endpoint is shared. */
+  getState: (roomId: string) => request<AnyRoomState>(`/rooms/${roomId}/state`),
+  join: (roomId: string) => post<Room>(`/rooms/${roomId}/join`),
   leave: (roomId: string, expectedSeq: number) =>
-    post<RoomState>(`/rooms/${roomId}/leave`, { expected_seq: expectedSeq }),
+    post<Room>(`/rooms/${roomId}/leave`, { expected_seq: expectedSeq }),
   disband: (roomId: string, expectedSeq: number) =>
-    post<RoomState>(`/rooms/${roomId}/disband`, { expected_seq: expectedSeq }),
-  start: (roomId: string, expectedSeq: number, rules?: Partial<GameRules>) =>
-    post<RoomState>(`/rooms/${roomId}/start`, { expected_seq: expectedSeq, rules: rules ?? {} }),
-  claimWin: (roomId: string, expectedSeq: number) =>
-    post<RoomState>(`/rooms/${roomId}/win`, { expected_seq: expectedSeq }),
-  /** Names the round being answered, so the count isn't bounced by another
-   * player's count landing first — see the API's rooms._card_seq. */
+    post<Room>(`/rooms/${roomId}/disband`, { expected_seq: expectedSeq }),
+  /** No rules: the server starts on the room's draft_rules. */
+  start: (roomId: string, expectedSeq: number) =>
+    post<Room>(`/rooms/${roomId}/start`, { expected_seq: expectedSeq }),
+  // Everything that acts on a round names it (round_no = the last round as
+  // this device saw it). The server then refuses it if that round has
+  // since closed, instead of applying a tap meant for round N to round N+1.
+  claimWin: (roomId: string, expectedSeq: number, roundNo: number) =>
+    post<Room>(`/rooms/${roomId}/win`, { expected_seq: expectedSeq, round_no: roundNo }),
   submitCards: (roomId: string, expectedSeq: number, roundNo: number, cards: number) =>
-    post<RoomState>(`/rooms/${roomId}/cards`, {
+    post<Room>(`/rooms/${roomId}/cards`, {
       expected_seq: expectedSeq,
       round_no: roundNo,
       cards,
@@ -90,20 +124,20 @@ export const api = {
     targetPlayer: string,
     cards: number,
   ) =>
-    post<RoomState>(`/rooms/${roomId}/submit-for`, {
+    post<Room>(`/rooms/${roomId}/submit-for`, {
       expected_seq: expectedSeq,
       round_no: roundNo,
       target_player: targetPlayer,
       cards,
     }),
-  specialHand: (roomId: string, expectedSeq: number) =>
-    post<RoomState>(`/rooms/${roomId}/special`, { expected_seq: expectedSeq }),
+  specialHand: (roomId: string, expectedSeq: number, roundNo: number) =>
+    post<Room>(`/rooms/${roomId}/special`, { expected_seq: expectedSeq, round_no: roundNo }),
   stepOut: (roomId: string, expectedSeq: number) =>
-    post<RoomState>(`/rooms/${roomId}/step-out`, { expected_seq: expectedSeq }),
-  voidSpecialHand: (roomId: string, expectedSeq: number) =>
-    post<RoomState>(`/rooms/${roomId}/void-special`, { expected_seq: expectedSeq }),
-  voidLastRound: (roomId: string, expectedSeq: number) =>
-    post<RoomState>(`/rooms/${roomId}/void`, { expected_seq: expectedSeq }),
+    post<Room>(`/rooms/${roomId}/step-out`, { expected_seq: expectedSeq }),
+  voidSpecialHand: (roomId: string, expectedSeq: number, roundNo: number) =>
+    post<Room>(`/rooms/${roomId}/void-special`, { expected_seq: expectedSeq, round_no: roundNo }),
+  voidLastRound: (roomId: string, expectedSeq: number, roundNo: number) =>
+    post<Room>(`/rooms/${roomId}/void`, { expected_seq: expectedSeq, round_no: roundNo }),
   endGame: (roomId: string, expectedSeq: number) =>
-    post<RoomState>(`/rooms/${roomId}/end`, { expected_seq: expectedSeq }),
+    post<Room>(`/rooms/${roomId}/end`, { expected_seq: expectedSeq }),
 };

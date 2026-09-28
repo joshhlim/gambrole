@@ -2,6 +2,8 @@
 // core/taidi_core/models.py. Keep in sync by hand for now; a generated
 // OpenAPI client can replace this once the API is stable.
 
+import type { MahjongRoomState } from "./mahjongTypes";
+
 export type RoomStatus = "lobby" | "in_progress" | "ended" | "disbanded";
 export type GameType = "taidi" | "mahjong";
 export type RoundPhase = "playing" | "collecting" | "resolved";
@@ -56,14 +58,17 @@ export interface ActiveRoom {
   status?: RoomStatus;
 }
 
-export interface RoomState {
+export interface TaidiRoomState {
   room_id: string;
-  game_type: GameType;
+  game_type: "taidi";
   status: RoomStatus;
   seq: number;
   host_id: string;
   members: Record<string, Member>;
   rules: GameRules | null;
+  /** Rules picked on /new, held until start — null for rooms created
+   * without any (the server then starts on its defaults). */
+  draft_rules: GameRules | null;
   rounds: RoundState[];
   balances: Record<string, number>;
   /** Players who stepped out mid-game, by name — they still hold a balance
@@ -73,3 +78,7 @@ export interface RoomState {
   ended_at: string | null;
   invite_code: string;
 }
+
+/** Every room the state endpoint can return, discriminated on game_type —
+ * checking it is the only way to reach a game's own fields. */
+export type AnyRoomState = TaidiRoomState | MahjongRoomState;

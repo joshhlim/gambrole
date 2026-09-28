@@ -69,7 +69,7 @@ export default function ResultScatter({ sessions }: { sessions: SessionFact[] })
     >
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="h-auto w-full touch-none"
+        className="h-auto w-full touch-pan-y"
         role="img"
         aria-label="Each session's net result plotted against how many rounds were played"
         onPointerLeave={clear}

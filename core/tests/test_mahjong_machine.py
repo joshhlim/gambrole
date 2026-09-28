@@ -113,12 +113,21 @@ class TestLobby:
         )
         assert state.member_ids_by_seat == [D, C, B, A]
 
-    def test_assign_seats_rejects_incomplete_mapping(self, now):
+    def test_assign_seats_merges_a_partial_swap(self, now):
+        # What the lobby sends when the host taps two players: only those two.
+        state = _room(now)
+        state = machine.fold(
+            state,
+            machine.assign_seats(
+                state, expected_seq=state.seq, actor=A, seat_map={A: 1, B: 0}, now=now
+            ),
+        )
+        assert {pid: m.seat for pid, m in state.members.items()} == {A: 1, B: 0, C: 2, D: 3}
+
+    def test_assign_seats_rejects_partial_map_that_doubles_up_a_seat(self, now):
         state = _room(now)
         with pytest.raises(IllegalTransition):
-            machine.assign_seats(
-                state, expected_seq=state.seq, actor=A, seat_map={A: 0, B: 1}, now=now
-            )
+            machine.assign_seats(state, expected_seq=state.seq, actor=A, seat_map={A: 1}, now=now)
 
     def test_assign_seats_rejects_duplicate_seat(self, now):
         state = _room(now)

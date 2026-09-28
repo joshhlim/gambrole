@@ -63,9 +63,6 @@ def mahjong_hand_stats(rooms: list[RoomState]) -> dict[UUID, MahjongPlayerStats]
         if room.status != RoomStatus.ENDED:
             continue
         for hand in room.hands:
-            if not hand.closed:
-                continue
-
             net_this_hand: dict[UUID, int] = {}
             for t in hand.transfers:
                 net_this_hand[t.from_player] = net_this_hand.get(t.from_player, 0) - t.amount_cents
@@ -78,6 +75,13 @@ def mahjong_hand_stats(rooms: list[RoomState]) -> dict[UUID, MahjongPlayerStats]
                     s.profit_by_kind[t.kind.value] = (
                         s.profit_by_kind.get(t.kind.value, 0) + sign * t.amount_cents
                     )
+
+            # Money moved in a hand the host ended mid-way (a yao or gang
+            # before anyone won) is real and counted above, so the profit
+            # breakdown still sums to the lifetime total — but an unfinished
+            # hand isn't a "hand played" for rates or best/worst.
+            if not hand.closed:
+                continue
 
             for pid, member in room.members.items():
                 s = _get(pid, member.display_name)

@@ -57,7 +57,8 @@ async def _auth_users(session) -> list[dict]:
         {
             "user_id": r.id,
             "email": (r.email or "").strip().lower() or None,
-            "display_name": (r.display_name or r.email or "Player").strip(),
+            # Never the address: display names are shown to everyone.
+            "display_name": (r.display_name or "Player").strip()[:100] or "Player",
         }
         for r in rows
     ]
@@ -137,9 +138,7 @@ async def backfill(*, dry_run: bool) -> None:
             )
         ).all()
         for row in missing:
-            handle = await assign_username(
-                session, row.user_id, suggest_username(row.email, row.display_name)
-            )
+            handle = await assign_username(session, row.user_id, suggest_username(row.display_name))
             print(f"  @{handle:<20} {row.display_name}")
         print(f"Assigned {len(missing)} username(s).")
 

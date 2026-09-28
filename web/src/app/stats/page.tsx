@@ -114,7 +114,9 @@ function FilterBar({
               type="button"
               onClick={() => setFilters(NO_FILTERS)}
               data-testid="filter-clear"
-              className="text-[10px] font-semibold text-brand-strong"
+              // Tiny text, full-size target: the negative margin keeps the
+              // 44px hit area from pushing the header row taller.
+              className="-my-3 flex min-h-11 min-w-11 items-center justify-center text-[10px] font-semibold text-brand-strong"
             >
               Clear
             </button>
@@ -163,7 +165,7 @@ function OverviewTab({
   t: Totals;
   filters: Filters;
   setFilters: (f: Filters) => void;
-  onSelectRoom?: (roomId: string) => void;
+  onSelectRoom?: (session: SessionFact) => void;
 }) {
   const opponents = useMemo(() => opponentTally(sessions), [sessions]);
   const mostPlayedWith = opponents[0];
@@ -444,18 +446,24 @@ export default function StatsPage() {
         </main>
       }
     >
-      <StatsView />
+      <KeyedStatsView />
     </Suspense>
   );
 }
 
-function StatsView() {
+/** Viewing a friend's stats is the same page against a different player —
+ * the API returns an identical shape, gated on friendship. Keyed on whose
+ * stats they are, so switching (a friend's, then your own) starts clean
+ * instead of showing the last person's numbers, title and filters under
+ * the new heading until the fetch lands. */
+function KeyedStatsView() {
+  const viewing = useSearchParams().get("player");
+  return <StatsView key={viewing ?? "me"} viewing={viewing} />;
+}
+
+function StatsView({ viewing }: { viewing: string | null }) {
   const router = useRouter();
-  const search = useSearchParams();
   const { user, checked } = useStoredUser();
-  // Viewing a friend's stats is the same page against a different player —
-  // the API returns an identical shape, gated on friendship.
-  const viewing = search.get("player");
   const [tab, setTab] = useState<Tab>("overview");
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [all, setAll] = useState<SessionFact[] | null>(null);
@@ -568,7 +576,7 @@ function StatsView() {
                 onSelectRoom={
                   viewing
                     ? undefined
-                    : (roomId) => router.push(`/room/${roomId}`)
+                    : (s) => router.push(`/room/${s.room_id}?g=${s.game_type}`)
                 }
               />
             ) : tab === "taidi" ? (

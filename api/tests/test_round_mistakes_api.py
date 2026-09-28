@@ -25,15 +25,17 @@ async def test_zero_cards_is_rejected_not_a_crash(make_device):
     r = await host.post(f"/rooms/{room_id}/win", json={"expected_seq": st["seq"]})
     st = r.json()
 
+    # Refused at the door now (1..52 is part of the request schema) — a 500
+    # here is the bug this covers. The engine keeps its own check for any
+    # caller that bypasses the API.
     r = await p1.post(f"/rooms/{room_id}/cards", json={"expected_seq": st["seq"], "cards": 0})
-    assert r.status_code == 400, r.text  # a 500 here is the bug this covers
-    assert "1 card" in r.json()["detail"]
+    assert r.status_code == 422, r.text
 
-    # Negative is still rejected, and the round is untouched — a valid
-    # resubmission goes straight through.
-    assert (
-        await p1.post(f"/rooms/{room_id}/cards", json={"expected_seq": st["seq"], "cards": -1})
-    ).status_code == 400
+    # Negative and absurdly large are rejected too, and the round is
+    # untouched — a valid resubmission goes straight through.
+    for bad in (-1, 53, 10**9):
+        r = await p1.post(f"/rooms/{room_id}/cards", json={"expected_seq": st["seq"], "cards": bad})
+        assert r.status_code == 422, r.text
     r = await p1.post(f"/rooms/{room_id}/cards", json={"expected_seq": st["seq"], "cards": 3})
     assert r.status_code == 200, r.text
     assert r.json()["rounds"][-1]["cards_submitted"][p1.user_id] == 3

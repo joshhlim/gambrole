@@ -1,0 +1,77 @@
+# Weekly logical backup of the production database's app data.
+#
+# This repo is PUBLIC, and so are its Actions artifacts — anyone can
+# download them. The dump is therefore encrypted (AES-256, symmetric) with
+# BACKUP_PASSPHRASE before it is uploaded; never upload a plain dump.
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   BACKUP_DATABASE_URL  plain postgresql://... URL (NOT postgresql+asyncpg).
+#                        Use Supabase's "Session pooler" string — the direct
+#                        connection is IPv6-only and runners can't reach it.
+#   BACKUP_PASSPHRASE    long random string; keep a copy outside GitHub, a
+#                        backup you can't decrypt is no backup.
+# Until both exist the job logs a notice and succeeds without doing anything.
+#
+# Restore steps: README.md → "Backups (room app)".
+name: Backup database
+
+on:
+  schedule:
+    - cron: "30 20 * * 0" # Sundays 20:30 UTC = Mondays 04:30 SGT, after game night
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+    steps:
+      - name: Check secrets
+        id: check
+        run: |
+          if [ -z "$BACKUP_DATABASE_URL" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "::notice::BACKUP_DATABASE_URL / BACKUP_PASSPHRASE not set; skipping backup."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dump and encrypt
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          umask 077
+          # Tolerate an asyncpg-style URL pasted by mistake.
+          url="${BACKUP_DATABASE_URL/postgresql+asyncpg:/postgresql:}"
+          stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          echo "STAMP=$stamp" >> "$GITHUB_ENV"
+          # pg_dump must be at least the server's major version; the
+          # runner's apt client lags Supabase, so use the official image.
+          # Only the app's own schema: Supabase manages auth/storage itself.
+          docker run --rm -e PGURL="$url" postgres:17-alpine \
+            sh -c 'pg_dump --format=custom --no-owner --no-privileges --schema=public "$PGURL"' \
+            > "gambrole-$stamp.dump"
+          test -s "gambrole-$stamp.dump"
+          gpg --symmetric --cipher-algo AES256 --batch --yes \
+              --passphrase "$BACKUP_PASSPHRASE" \
+              --output "gambrole-$stamp.dump.gpg" "gambrole-$stamp.dump"
+          rm -f "gambrole-$stamp.dump"
+          ls -l "gambrole-$stamp.dump.gpg"
+
+      - name: Upload encrypted dump
+        if: steps.check.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gambrole-db-${{ env.STAMP }}
+          path: gambrole-${{ env.STAMP }}.dump.gpg
+          retention-days: 30
+          if-no-files-found: error

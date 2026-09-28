@@ -1,106 +1,43 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, ApiError } from "@/lib/api";
-import { usePolling } from "@/lib/usePolling";
-import { readFreshState } from "@/lib/freshState";
-import type { GameRules, RoomState } from "@/lib/types";
+import { api } from "@/lib/api";
+import { money } from "@/lib/format";
+import { describeTaidiRules } from "@/lib/rulesSummary";
+import type { AnyRoomState, TaidiRoomState } from "@/lib/types";
+import { useRoom } from "./useRoom";
+import { RoomFrame, RoomLoading, RoomProblem, RulesLine } from "./RoomShell";
 
-/** Rules chosen on /new before the room existed — see that page for why
- * this can't just be sent at room-creation time. */
-function readStoredRules(roomId: string): Partial<GameRules> | undefined {
-  try {
-    const raw = sessionStorage.getItem(`gambrole_rules_${roomId}`);
-    return raw ? (JSON.parse(raw) as GameRules) : undefined;
-  } catch {
-    return undefined;
-  }
-}
+type RoomState = TaidiRoomState;
 
-function money(cents: number): string {
-  const dollars = Math.abs(cents) / 100;
-  return `${cents < 0 ? "-" : ""}$${dollars.toFixed(2)}`;
-}
+const narrow = (s: AnyRoomState) => (s.game_type === "taidi" ? s : null);
 
-export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }) {
+/** The round a command is about: the last one as this device saw it. */
+const lastRoundNo = (s: RoomState) => s.rounds[s.rounds.length - 1]?.round_no ?? 0;
+
+export default function TaidiRoom({
+  roomId,
+  me,
+  initial,
+  onWrongGame,
+}: {
+  roomId: string;
+  me: string;
+  initial: AnyRoomState | null;
+  onWrongGame: (actual: AnyRoomState) => void;
+}) {
   const router = useRouter();
-  const [banner, setBanner] = useState<string | null>(null);
   const [cardsInput, setCardsInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [blockedBy, setBlockedBy] = useState<string | null>(null);
-  const joinedRef = useRef(false);
-
-  const { data: state, setData } = usePolling<RoomState>(
-    () => api.getState(roomId),
-    1500,
-    [roomId, me],
-    readFreshState<RoomState>(roomId),
-  );
-
-  const isMember = !!(state && me in state.members);
-
-  useEffect(() => {
-    // The host disbanded the room while others were still in the lobby —
-    // everyone still viewing it gets bounced home on their next poll.
-    if (state?.status === "disbanded") router.replace("/");
-  }, [state?.status, router]);
-
-  // Auto-join once: if we landed here via a shared link/code without having
-  // joined yet, and the room is still in its lobby, join automatically.
-  useEffect(() => {
-    if (!state || joinedRef.current) return;
-    if (!isMember && state.status === "lobby") {
-      joinedRef.current = true;
-      api
-        .join(roomId)
-        .then(setData)
-        .catch((e) => {
-          setBanner(e instanceof ApiError ? e.message : "Couldn't join this room.");
-          // Refused because you're already in another room: the API hands
-          // back which one, so offer a way there instead of stranding you
-          // on a lobby you can't enter.
-          const other = (e instanceof ApiError ? e.detail : null) as {
-            active_room_id?: string;
-          } | null;
-          if (other?.active_room_id) setBlockedBy(other.active_room_id);
-        });
-    }
-  }, [state, isMember, roomId, setData]);
-
-  /**
-   * Runs a command against the room's current seq. A 409 means someone
-   * else's event landed first — that doesn't invalidate what THIS player
-   * is trying to do (their own card count, a special-hand claim, ...), so
-   * we resync to the fresh state and retry once against the new seq before
-   * giving up. Only a second failure (or a non-seq error) surfaces to the
-   * player.
-   */
-  async function run<T>(action: (seq: number) => Promise<T>) {
-    setBusy(true);
-    setBanner(null);
-    let seq = state?.seq;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (seq === undefined) break;
-      try {
-        const result = await action(seq);
-        setBusy(false);
-        return result;
-      } catch (e) {
-        if (e instanceof ApiError && e.conflict) {
-          setData(e.conflict.state);
-          seq = e.conflict.state.seq;
-          continue; // retry once against the fresh seq
-        }
-        setBanner(e instanceof ApiError ? e.message : "Something went wrong.");
-        setBusy(false);
-        return null;
-      }
-    }
-    setBanner("Someone else keeps acting first — try again.");
-    setBusy(false);
-    return null;
-  }
+  const { state, problem, isMember, isHost, busy, banner, blockedBy, run } = useRoom<RoomState>({
+    roomId,
+    me,
+    narrow,
+    join: useCallback((id: string) => api.join(id), []),
+    initial,
+    onWrongGame,
+    movedOn: "That round already moved on.",
+  });
 
   const membersBySeat = useMemo(
     () => (state ? Object.values(state.members).sort((a, b) => a.seat - b.seat) : []),
@@ -112,54 +49,17 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
   );
   const currentRound = state && state.rounds.length > 0 ? state.rounds[state.rounds.length - 1] : null;
 
-  if (!state) {
-    return <main className="flex-1 flex items-center justify-center text-muted text-sm">Loading…</main>;
-  }
+  if (problem === "not-found" || problem === "forbidden") return <RoomProblem kind={problem} />;
+  if (!state) return <RoomLoading offline={problem === "offline"} />;
 
-  const isHost = state.host_id === me;
   // Someone who stepped out keeps their balance and their place in the
   // standings, so fall back to the name recorded when they left.
   const nameOf = (id: string) =>
     state.members[id]?.display_name ?? state.departed?.[id] ?? "?";
-
-  /**
-   * Back minimises rather than leaves: you stay in the room and can use the
-   * rest of the app, with home's "Rejoin Room" button as the way in again.
-   * Actually leaving is a separate, explicit choice — see the Leave control
-   * in the lobby and at the table.
-   */
-  function handleBack() {
-    router.push("/");
-  }
+  const rules = state.rules ?? state.draft_rules;
 
   return (
-    <main className="flex-1 px-5 py-8 max-w-md mx-auto w-full">
-      <div className="flex items-center gap-3 mb-6">
-        <button
-          onClick={handleBack}
-          disabled={busy}
-          data-testid="back-btn"
-          className="h-11 w-11 rounded-full border border-border flex items-center justify-center text-lg font-bold text-brand disabled:opacity-50"
-        >
-          ←
-        </button>
-      </div>
-
-      {banner && (
-        <div className="mb-4 rounded-lg border border-border bg-surface px-4 py-2 text-sm text-muted">
-          {banner}
-          {blockedBy && (
-            <button
-              onClick={() => router.push(`/room/${blockedBy}`)}
-              data-testid="go-to-active-room-btn"
-              className="mt-2 w-full rounded-lg bg-brand-strong py-2 text-xs font-semibold text-white"
-            >
-              Go to your game
-            </button>
-          )}
-        </div>
-      )}
-
+    <RoomFrame offline={problem === "offline"} banner={banner} blockedBy={blockedBy}>
       {state.status === "lobby" && (
         <Lobby
           state={state}
@@ -168,13 +68,14 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
           canJoin={!blockedBy}
           membersBySeat={membersBySeat}
           busy={busy}
-          onJoin={() => run((_seq) => api.join(roomId)).then((r) => r && setData(r))}
-          onStart={() =>
-            run((seq) => api.start(roomId, seq, readStoredRules(roomId))).then((r) => r && setData(r))
+          rulesText={rules ? describeTaidiRules(rules) : null}
+          onJoin={() => run(() => api.join(roomId))}
+          onStart={() => run((s) => api.start(roomId, s.seq))}
+          onLeave={() =>
+            run((s) => api.leave(roomId, s.seq), { apply: false }).then((r) => r && router.push("/"))
           }
-          onLeave={() => run((seq) => api.leave(roomId, seq)).then((r) => r && router.push("/"))}
           onDisband={() =>
-            run((seq) => api.disband(roomId, seq)).then((r) => r && router.push("/"))
+            run((s) => api.disband(roomId, s.seq), { apply: false }).then((r) => r && router.push("/"))
           }
         />
       )}
@@ -183,33 +84,35 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
         <TableView
           state={state}
           me={me}
+          isMember={isMember}
           currentRound={currentRound}
           standings={standings}
           nameOf={nameOf}
           busy={busy}
           cardsInput={cardsInput}
           setCardsInput={setCardsInput}
-          onClaimWin={() => run((seq) => api.claimWin(roomId, seq)).then((r) => r && setData(r))}
+          onClaimWin={() =>
+            run((s) => api.claimWin(roomId, s.seq, lastRoundNo(s)), { pinned: true })
+          }
           onSubmitCards={(cards) =>
-            run((seq) => api.submitCards(roomId, seq, currentRound.round_no, cards)).then((r) => {
-              if (r) {
-                setData(r);
-                setCardsInput("");
-              }
-            })
+            run((s) => api.submitCards(roomId, s.seq, lastRoundNo(s), cards), { pinned: true }).then(
+              (r) => r && setCardsInput(""),
+            )
           }
           isHost={isHost}
           onSpecialHand={() =>
-            run((seq) => api.specialHand(roomId, seq)).then((r) => r && setData(r))
+            run((s) => api.specialHand(roomId, s.seq, lastRoundNo(s)), { pinned: true })
           }
           onVoidRound={() =>
-            run((seq) => api.voidLastRound(roomId, seq)).then((r) => r && setData(r))
+            run((s) => api.voidLastRound(roomId, s.seq, lastRoundNo(s)), { pinned: true })
           }
           onVoidSpecial={() =>
-            run((seq) => api.voidSpecialHand(roomId, seq)).then((r) => r && setData(r))
+            run((s) => api.voidSpecialHand(roomId, s.seq, lastRoundNo(s)), { pinned: true })
           }
-          onStepOut={() => run((seq) => api.stepOut(roomId, seq)).then((r) => r && router.push("/"))}
-          onEndGame={() => run((seq) => api.endGame(roomId, seq)).then((r) => r && setData(r))}
+          onStepOut={() =>
+            run((s) => api.stepOut(roomId, s.seq), { apply: false }).then((r) => r && router.push("/"))
+          }
+          onEndGame={() => run((s) => api.endGame(roomId, s.seq))}
         />
       )}
 
@@ -224,7 +127,7 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
           <RoundLog rounds={state.rounds} me={me} nameOf={nameOf} />
         </div>
       )}
-    </main>
+    </RoomFrame>
   );
 }
 
@@ -235,6 +138,7 @@ function Lobby({
   canJoin,
   membersBySeat,
   busy,
+  rulesText,
   onJoin,
   onStart,
   onLeave,
@@ -246,6 +150,7 @@ function Lobby({
   canJoin: boolean;
   membersBySeat: RoomState["members"][string][];
   busy: boolean;
+  rulesText: string | null;
   onJoin: () => void;
   onStart: () => void;
   onLeave: () => void;
@@ -259,6 +164,8 @@ function Lobby({
         <p data-testid="invite-code" className="text-3xl font-extrabold tracking-[0.3em] text-brand">{state.invite_code}</p>
       </div>
 
+      <RulesLine text={rulesText} />
+
       <div>
         <p className="text-xs uppercase tracking-widest text-muted mb-2">Players</p>
         <div className="space-y-2">
@@ -269,7 +176,7 @@ function Lobby({
               className="rounded-xl border border-border bg-surface px-4 py-3 text-sm font-medium"
             >
               {m.display_name}
-              {m.player_id === state.host_id && <span className="ml-2 text-xs text-gold">HOST</span>}
+              {m.player_id === state.host_id && <span className="ml-2 text-xs font-semibold text-gold-text">HOST</span>}
             </div>
           ))}
         </div>
@@ -416,6 +323,7 @@ function RoundLog({
 function TableView({
   state,
   me,
+  isMember,
   currentRound,
   standings,
   nameOf,
@@ -433,6 +341,7 @@ function TableView({
 }: {
   state: RoomState;
   me: string;
+  isMember: boolean;
   currentRound: NonNullable<RoomState["rounds"][number]>;
   standings: [string, number][];
   nameOf: (id: string) => string;
@@ -460,6 +369,10 @@ function TableView({
   const pending = Object.keys(state.members).filter(
     (id) => id !== currentRound.winner && !(id in currentRound.cards_submitted),
   );
+  // What the form would send, or null. A hand has 13 cards but the engine
+  // accepts up to 52, so the form mirrors the engine rather than the deal.
+  const cardsValue = /^\d+$/.test(cardsInput.trim()) ? Number(cardsInput.trim()) : null;
+  const cardsValid = cardsValue !== null && cardsValue >= 1 && cardsValue <= 52;
 
   return (
     <div className="space-y-6">
@@ -486,7 +399,11 @@ function TableView({
         </div>
       </div>
 
-      {isPlaying && (
+      {state.rules && <RulesLine text={describeTaidiRules(state.rules)} />}
+
+      {/* Someone watching without a seat (they stepped out) sees the table
+          but gets nothing to press. */}
+      {isMember && isPlaying && (
         <div className="space-y-3">
           <button
             onClick={onClaimWin}
@@ -539,20 +456,19 @@ function TableView({
         </div>
       )}
 
-      {isCollecting && iAmWinner && (
+      {isMember && isCollecting && iAmWinner && (
         <p data-testid="waiting-text" className="text-center text-sm text-muted">
           Waiting for {pending.map(nameOf).join(", ")}…
         </p>
       )}
 
-      {isCollecting && !iAmWinner && !haveSubmitted && (
+      {isMember && isCollecting && !iAmWinner && !haveSubmitted && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            const n = Number(cardsInput);
             // 0 is the winner's count — the engine rejects it, so don't
             // let the form send it in the first place.
-            if (Number.isInteger(n) && n >= 1) onSubmitCards(n);
+            if (cardsValid && cardsValue !== null) onSubmitCards(cardsValue);
           }}
           className="space-y-3"
         >
@@ -563,6 +479,8 @@ function TableView({
             type="number"
             inputMode="numeric"
             min={1}
+            max={52}
+            step={1}
             data-testid="cards-input"
             className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-center text-lg outline-none focus:border-brand-strong"
             value={cardsInput}
@@ -571,7 +489,7 @@ function TableView({
           />
           <button
             type="submit"
-            disabled={busy || cardsInput.trim() === "" || Number(cardsInput) < 1}
+            disabled={busy || !cardsValid}
             data-testid="submit-cards-btn"
             className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
           >
@@ -580,7 +498,7 @@ function TableView({
         </form>
       )}
 
-      {isCollecting && !iAmWinner && haveSubmitted && (
+      {isMember && isCollecting && !iAmWinner && haveSubmitted && (
         <p data-testid="waiting-text" className="text-center text-sm text-muted">
           Waiting for {pending.map(nameOf).join(", ")}…
         </p>
@@ -591,7 +509,7 @@ function TableView({
       {/* Everything below here either reverses something or ends the
           night. Grouped, small and confirm-gated, kept well away from Win
           and Special — the buttons people reach for mid-hand. */}
-      {(mySpecials > 0 || (isCollecting && (isHost || iAmWinner))) && (
+      {isMember && (mySpecials > 0 || (isCollecting && (isHost || iAmWinner))) && (
         <div className="space-y-2 rounded-xl border border-border bg-surface px-3 py-2.5">
           <p className="text-[10px] uppercase tracking-wider text-muted">Fix a mistake</p>
 
@@ -655,91 +573,93 @@ function TableView({
       {/* Ending settles every balance and creates debts in the Debts tab,
           so it asks first and only the host sees it. Not filed under "fix a
           mistake" — it isn't one. */}
-      <div className="rounded-xl border border-border bg-surface px-3 py-2.5">
-        {isHost &&
-          (confirmEnd ? (
-            <div className="space-y-2">
+      {isMember && (
+        <div className="rounded-xl border border-border bg-surface px-3 py-2.5">
+          {isHost &&
+            (confirmEnd ? (
+              <div className="space-y-2">
+                <p className="text-center text-xs text-muted">
+                  End the game and settle up? This can&apos;t be undone.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setConfirmEnd(false);
+                      onEndGame();
+                    }}
+                    disabled={busy}
+                    data-testid="confirm-end-btn"
+                    className="flex-1 rounded-lg bg-danger py-2 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    End &amp; settle
+                  </button>
+                  <button
+                    onClick={() => setConfirmEnd(false)}
+                    data-testid="cancel-end-btn"
+                    className="flex-1 rounded-lg border border-border py-2 text-xs font-semibold text-muted"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmEnd(true)}
+                disabled={busy}
+                data-testid="end-game-btn"
+                className="w-full rounded-lg border border-border py-2 text-xs font-semibold text-muted disabled:opacity-50"
+              >
+                End Game
+              </button>
+            ))}
+          {!isHost && (
+            <p className="text-center text-[11px] text-muted">
+              Only {nameOf(state.host_id)} can end the game.
+            </p>
+          )}
+
+          {/* Leaving for good, as opposed to the back arrow, which just
+              minimises. One-way: the engine refuses mid-game joins, so the
+              confirm has to say so plainly. */}
+          {confirmLeave ? (
+            <div className="mt-2 space-y-2">
               <p className="text-center text-xs text-muted">
-                End the game and settle up? This can&apos;t be undone.
+                Leave for good? You keep what you&apos;re up or down and settle with everyone,
+                but you can&apos;t rejoin this game.
               </p>
               <div className="flex gap-2">
                 <button
                   onClick={() => {
-                    setConfirmEnd(false);
-                    onEndGame();
+                    setConfirmLeave(false);
+                    onStepOut();
                   }}
                   disabled={busy}
-                  data-testid="confirm-end-btn"
+                  data-testid="confirm-leave-btn"
                   className="flex-1 rounded-lg bg-danger py-2 text-xs font-semibold text-white disabled:opacity-50"
                 >
-                  End &amp; settle
+                  Leave game
                 </button>
                 <button
-                  onClick={() => setConfirmEnd(false)}
-                  data-testid="cancel-end-btn"
+                  onClick={() => setConfirmLeave(false)}
+                  data-testid="cancel-leave-btn"
                   className="flex-1 rounded-lg border border-border py-2 text-xs font-semibold text-muted"
                 >
-                  Cancel
+                  Stay
                 </button>
               </div>
             </div>
           ) : (
             <button
-              onClick={() => setConfirmEnd(true)}
+              onClick={() => setConfirmLeave(true)}
               disabled={busy}
-              data-testid="end-game-btn"
-              className="w-full rounded-lg border border-border py-2 text-xs font-semibold text-muted disabled:opacity-50"
+              data-testid="leave-game-btn"
+              className="mt-2 w-full rounded-lg border border-border py-2 text-xs font-semibold text-muted disabled:opacity-50"
             >
-              End Game
+              Leave game
             </button>
-          ))}
-        {!isHost && (
-          <p className="text-center text-[11px] text-muted">
-            Only {nameOf(state.host_id)} can end the game.
-          </p>
-        )}
-
-        {/* Leaving for good, as opposed to the back arrow, which just
-            minimises. One-way: the engine refuses mid-game joins, so the
-            confirm has to say so plainly. */}
-        {confirmLeave ? (
-          <div className="mt-2 space-y-2">
-            <p className="text-center text-xs text-muted">
-              Leave for good? You keep what you&apos;re up or down and settle with everyone,
-              but you can&apos;t rejoin this game.
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  setConfirmLeave(false);
-                  onStepOut();
-                }}
-                disabled={busy}
-                data-testid="confirm-leave-btn"
-                className="flex-1 rounded-lg bg-danger py-2 text-xs font-semibold text-white disabled:opacity-50"
-              >
-                Leave game
-              </button>
-              <button
-                onClick={() => setConfirmLeave(false)}
-                data-testid="cancel-leave-btn"
-                className="flex-1 rounded-lg border border-border py-2 text-xs font-semibold text-muted"
-              >
-                Stay
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => setConfirmLeave(true)}
-            disabled={busy}
-            data-testid="leave-game-btn"
-            className="mt-2 w-full rounded-lg border border-border py-2 text-xs font-semibold text-muted disabled:opacity-50"
-          >
-            Leave game
-          </button>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

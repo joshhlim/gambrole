@@ -1,0 +1,33 @@
+import { money } from "./format";
+import type { MahjongRules } from "./mahjongTypes";
+import type { GameRules } from "./types";
+
+// Client-side twins of the backend's GameRules.describe() and
+// MahjongRules.describe() — those aren't serialized, and one line is all a
+// phone at the table has room for.
+
+export function describeTaidiRules(r: GameRules): string {
+  const parts = [`${money(r.card_value_cents)}/card`];
+  if (r.base_cards) parts.push(`base ${r.base_cards}`);
+  parts.push(
+    r.multipliers_enabled
+      ? `×2 at ${r.double_threshold}+, ×3 at ${r.triple_threshold}+`
+      : "no multipliers",
+  );
+  parts.push(r.difference_payouts ? "difference payouts" : "winner-only");
+  if (r.special_hands_enabled) parts.push(`special +${r.special_hand_cards}`);
+  return parts.join(" · ");
+}
+
+export function describeMahjongRules(r: MahjongRules): string {
+  const top = r.tai_table[String(r.max_tai)];
+  const parts = [
+    `base ${r.base_chips}`,
+    `yao ${r.yao_chips}`,
+    `gang ${r.gang_chips}`,
+    `${r.max_tai} tai max${top ? ` (${top.hu}/${top.zimo})` : ""}`,
+  ];
+  if (r.zimo_bonus_chips) parts.push(`zimo bonus ${r.zimo_bonus_chips}`);
+  if (r.klppdd_chips) parts.push(`klppdd ${r.klppdd_chips}`);
+  return parts.join(" · ");
+}

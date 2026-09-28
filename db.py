@@ -12,6 +12,7 @@ behave identically.
 import json
 import os
 import sqlite3
+import sys
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +36,11 @@ def secret(key: str):
 def _connect_raw():
     url = secret("TURSO_DATABASE_URL")
     if url:
+        # Tests wipe tables freely; never let that reach a hosted database
+        # (st.secrets would otherwise load .streamlit/secrets.toml). A local
+        # file path is fine — the libsql driver test uses one.
+        if "pytest" in sys.modules and "://" in str(url):
+            raise RuntimeError("Refusing to connect to remote Turso under pytest")
         import libsql
 
         token = secret("TURSO_AUTH_TOKEN")

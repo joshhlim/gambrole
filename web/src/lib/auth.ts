@@ -4,9 +4,37 @@ import { createBrowserClient } from "@supabase/ssr";
 import type { Session, User } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
 
+import { API_URL, API_URL_MISSING } from "./config";
+
 const TOKEN_KEY = "taidi_token";
 const USER_KEY = "taidi_user";
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+// Storage can throw outright (Safari private mode, blocked site data), and
+// a throw here would take sign-in down with it — so every access degrades
+// to "nothing stored" instead.
+function storageGet(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    /* signed in for this page load only */
+  }
+}
+
+function storageRemove(key: string): void {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    /* nothing to clear */
+  }
+}
 
 // "dev" (the default, used locally): the app's own POST /auth/dev-login
 // mints a token for any name, no external provider. "supabase": real
@@ -55,15 +83,50 @@ function supabaseSessionToStoredAuth(
 // Promise). This cache — kept current via onAuthStateChange — is what lets
 // getStoredAuth() stay a plain synchronous function either way.
 let cachedSupabaseAuth: StoredAuth | null = null;
-supabase?.auth.onAuthStateChange((_event, session) => {
+// The client exchanges a reset link's ?code= itself while initialising and
+// announces PASSWORD_RECOVERY once, possibly before /auth/callback has
+// mounted to hear it. Registered here, at client creation, it can't be
+// missed; the callback page reads it back via wasPasswordRecovery().
+let passwordRecovery = false;
+supabase?.auth.onAuthStateChange((event, session) => {
   cachedSupabaseAuth = supabaseSessionToStoredAuth(session);
+  if (event === "PASSWORD_RECOVERY") passwordRecovery = true;
 });
+
+export function wasPasswordRecovery(): boolean {
+  return passwordRecovery;
+}
+
+/**
+ * The bearer token for the next request. In Supabase mode this asks the
+ * client rather than trusting the cache: getSession() refreshes a token
+ * that's about to expire, where the cache would hand back a dead one after
+ * the phone has sat locked through an hour-long hand.
+ */
+export async function getAccessToken(): Promise<string | null> {
+  if (supabase) {
+    const { data } = await supabase.auth.getSession();
+    cachedSupabaseAuth = supabaseSessionToStoredAuth(data.session);
+    return data.session?.access_token ?? null;
+  }
+  return getStoredAuth()?.token ?? null;
+}
+
+/** Forces a new token after the API refused one. Dev tokens can't be
+ * refreshed — null means "retrying won't help". */
+export async function refreshAccessToken(): Promise<string | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase.auth.refreshSession();
+  if (error) return null;
+  cachedSupabaseAuth = supabaseSessionToStoredAuth(data.session);
+  return data.session?.access_token ?? null;
+}
 
 export function getStoredAuth(): StoredAuth | null {
   if (supabase) return cachedSupabaseAuth;
   if (typeof window === "undefined") return null;
-  const token = window.localStorage.getItem(TOKEN_KEY);
-  const rawUser = window.localStorage.getItem(USER_KEY);
+  const token = storageGet(TOKEN_KEY);
+  const rawUser = storageGet(USER_KEY);
   if (!token || !rawUser) return null;
   try {
     return { token, user: JSON.parse(rawUser) as CurrentUser };
@@ -86,18 +149,28 @@ function announceAuthChange(): void {
 
 /** Dev mode only — Supabase manages its own persistence via cookies. */
 export function storeAuth(auth: StoredAuth): void {
-  window.localStorage.setItem(TOKEN_KEY, auth.token);
-  window.localStorage.setItem(USER_KEY, JSON.stringify(auth.user));
+  storageSet(TOKEN_KEY, auth.token);
+  storageSet(USER_KEY, JSON.stringify(auth.user));
   announceAuthChange();
 }
 
 export async function signOut(): Promise<void> {
   if (supabase) {
-    await supabase.auth.signOut();
+    // A global sign-out has to reach Supabase to revoke the refresh token.
+    // Offline (or with Supabase down) that fails — and must not leave you
+    // signed in on this device, so fall back to just dropping the local
+    // session.
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (!error) return;
+    } catch {
+      /* fall through */
+    }
+    await supabase.auth.signOut({ scope: "local" });
     return;
   }
-  window.localStorage.removeItem(TOKEN_KEY);
-  window.localStorage.removeItem(USER_KEY);
+  storageRemove(TOKEN_KEY);
+  storageRemove(USER_KEY);
   announceAuthChange();
 }
 
@@ -159,6 +232,7 @@ export function useStoredUser(): AuthCheck {
  * any display name, no external identity provider.
  */
 export async function devLogin(displayName: string): Promise<StoredAuth> {
+  if (!API_URL) throw new Error(API_URL_MISSING);
   const res = await fetch(`${API_URL}/auth/dev-login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

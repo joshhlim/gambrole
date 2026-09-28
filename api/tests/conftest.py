@@ -13,9 +13,18 @@ sys.path.insert(0, str(ROOT / "api"))
 
 # Must happen before any `app.*` import, since Settings() reads the env at
 # construction time (module-level `engine` in app.db is built from it).
-os.environ.setdefault(
-    "TAIDI_DATABASE_URL", "postgresql+asyncpg://gambrole:gambrole_dev@localhost:5433/gambrole_test"
+#
+# FORCED, not defaulted: every test drops and recreates every table. The
+# maintenance scripts tell you to export TAIDI_DATABASE_URL pointing at
+# production, and with a default here, running the tests in that same shell
+# would have wiped it. An explicit test database can still be chosen with
+# TAIDI_TEST_DATABASE_URL, and _assert_disposable() checks it either way.
+os.environ["TAIDI_DATABASE_URL"] = os.environ.get(
+    "TAIDI_TEST_DATABASE_URL",
+    "postgresql+asyncpg://gambrole:gambrole_dev@localhost:5433/gambrole_test",
 )
+os.environ["TAIDI_AUTH_MODE"] = "dev"
+os.environ["TAIDI_RATE_LIMIT_ENABLED"] = "false"
 
 import asyncpg  # noqa: E402
 import pytest  # noqa: E402
@@ -45,6 +54,13 @@ def _ensure_test_database():
     asyncio.run(_create())
 
 
+def _assert_disposable() -> None:
+    """Refuse to drop tables anywhere but a local database named *_test."""
+    url = engine.url
+    if url.host not in ("localhost", "127.0.0.1") or not (url.database or "").endswith("_test"):
+        pytest.exit(f"Refusing to wipe {url.host}/{url.database}: not a local *_test database.")
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _clean_schema():
     """Fresh tables for every test — cheap since the schema is tiny.
@@ -53,6 +69,7 @@ async def _clean_schema():
     test's event loop — pytest-asyncio gives each test function its own
     loop by default, and asyncpg connections can't be reused across loops.
     """
+    _assert_disposable()
     await engine.dispose()
     async with engine.begin() as conn:
         await conn.run_sync(metadata.drop_all)

@@ -140,10 +140,12 @@ def test_rulesets_save_apply_edit_delete(app_path):
     assert "Casual" not in db.rulesets_all()
 
 
-def test_settings_rename_edit_delete(app_path):
+def test_settings_rename_edit_delete(app_path, monkeypatch):
+    monkeypatch.setenv("APP_PASSCODE", "1234")
     _seed_players()
     _seed_finished_game()
     at = fresh(app_path, page="settings")
+    at.session_state["authed"] = True
     at.run()
     at.selectbox(key="pm_rename_old").set_value("Alice")
     at.text_input(key="pm_rename_new").input("Alicia").run()
@@ -191,3 +193,44 @@ def test_passcode_gate(app_path, monkeypatch):
     [b for b in at.button if getattr(b, "label", "") == "Enter"][0].click().run()
     assert at.session_state["authed"] is True
     assert [b for b in at.button if b.key == "tile_new"]
+
+
+def test_admin_actions_hidden_without_passcode(app_path):
+    _seed_players()
+    _seed_finished_game()
+    at = fresh(app_path, page="settings")
+    at.run()
+    assert not at.exception
+    keys = {b.key for b in at.button}
+    assert "savetot_a1" in keys
+    for k in ("del_a1", "backup_restore", "dz_clear_arch", "dz_clear_players", "dz_factory"):
+        assert k not in keys, k
+
+
+def test_admin_actions_shown_behind_passcode(app_path, monkeypatch):
+    monkeypatch.setenv("APP_PASSCODE", "1234")
+    _seed_players()
+    _seed_finished_game()
+    at = fresh(app_path, page="settings")
+    at.session_state["authed"] = True
+    at.run()
+    keys = {b.key for b in at.button}
+    for k in ("del_a1", "backup_restore", "dz_clear_arch", "dz_clear_players", "dz_factory"):
+        assert k in keys, k
+
+
+def test_passcode_gate_throttles_after_repeated_failures(app_path, monkeypatch):
+    monkeypatch.setenv("APP_PASSCODE", "1234")
+    at = fresh(app_path)
+    at.run()
+
+    def attempt(code):
+        at.text_input(key="passcode_input").input(code).run()
+        [b for b in at.button if getattr(b, "label", "") == "Enter"][0].click().run()
+
+    for _ in range(5):
+        attempt("wrong")
+    assert at.session_state["passcode_locked_until"] > 0
+    attempt("1234")  # correct, but locked out
+    assert "authed" not in at.session_state
+    assert any("Too many attempts" in e.value for e in at.error)

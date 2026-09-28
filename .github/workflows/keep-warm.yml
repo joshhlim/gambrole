@@ -1,25 +1,36 @@
-# Render spins a free web service down after 15 minutes with no inbound
-# traffic, and waking it takes ~33 seconds — measured, and long enough that
-# the first person to open the app on game night thinks it's broken. This
-# pings the health check often enough to keep it awake.
+# BEST-EFFORT FALLBACK ONLY. Render spins a free web service down after 15
+# minutes with no inbound traffic, and waking it takes ~33 seconds — long
+# enough that the first person to open the app on game night thinks it's
+# broken. In practice GitHub's scheduler delivered only ~3 of these runs a
+# day, nowhere near every 5 minutes, so this does NOT keep the service awake.
+#
+# The reliable fix is an external pinger: a free cron-job.org or UptimeRobot
+# monitor hitting https://gambrole-api-sg.onrender.com/readyz every 5-10
+# minutes during the window below. Keep this workflow as a backstop.
+#
+# It hits /readyz rather than /healthz because /readyz runs a query against
+# the database — that also counts as activity for the free Supabase project,
+# which pauses after a week without any.
 #
 # Deliberately NOT 24/7: a free service is capped at 750 instance-hours a
 # month, and staying up round the clock burns ~744 of them, leaving no room
 # for a second free service (or a redeploy overlap) before Render suspends
-# it for the rest of the month. This window covers 15:00-02:00 SGT — evenings,
-# when game night actually happens — for roughly 330 hours. Widen the hours
-# below if you start playing at other times; the cost is only instance-hours.
+# it for the rest of the month. The cron hours 7-18 UTC fire from 07:00 to
+# 18:55 UTC = 15:00 to 02:55 SGT — evenings, when game night happens — about
+# 12 hours a day, ~370 a month if every ping landed. Widen the hours below if
+# you start playing at other times; the cost is only instance-hours.
 #
-# GitHub only guarantees scheduled runs are eventually delivered, not that
-# they're punctual — they can slip by 10+ minutes under load, which is why
-# this fires every 5 minutes rather than every 10. Missing two in a row would
-# let the service sleep.
+# GitHub also disables scheduled workflows after 60 days without repository
+# activity; re-enable it from the Actions tab if that happens.
 name: Keep API warm
 
 on:
   schedule:
-    - cron: "*/5 7-18 * * *" # UTC; 15:00-02:00 SGT
+    - cron: "*/5 7-18 * * *" # UTC; 15:00-02:55 SGT
   workflow_dispatch: # so you can wake it by hand before a session
+
+permissions:
+  contents: read
 
 # A slow cold start shouldn't pile up overlapping runs.
 concurrency:
@@ -30,12 +41,13 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping the health check
+      - name: Ping the readiness check
         run: |
           # --max-time 90 because a cold start legitimately takes ~33s; the
-          # retries cover Render returning 502 while the container boots.
+          # retries cover Render returning 502 while the container boots
+          # (and a paused database answering 503).
           curl --fail --show-error --silent \
                --retry 3 --retry-delay 10 --retry-all-errors \
                --max-time 90 \
                -o /dev/null -w 'status=%{http_code} time=%{time_total}s\n' \
-               https://gambrole-api-sg.onrender.com/healthz
+               https://gambrole-api-sg.onrender.com/readyz

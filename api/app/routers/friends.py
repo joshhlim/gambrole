@@ -20,6 +20,7 @@ from ..friends_service import (
     send_request,
     unfriend,
 )
+from ..ratelimit import rate_limit
 from ..schemas import SendFriendRequest, SetUsernameRequest
 from ..users_service import (
     USERNAME_HELP,
@@ -65,7 +66,9 @@ async def put_username(
     return {"username": username}
 
 
-@router.get("/users/username-available")
+@router.get(
+    "/users/username-available", dependencies=[Depends(rate_limit("username-available", 60))]
+)
 async def username_available(
     u: str = Query(min_length=1, max_length=24),
     session: AsyncSession = Depends(get_session),
@@ -89,7 +92,7 @@ async def username_available(
     }
 
 
-@router.get("/users/search")
+@router.get("/users/search", dependencies=[Depends(rate_limit("user-search", 30))])
 async def search_users(
     q: str = Query(min_length=1, max_length=320),
     user: CurrentUser = Depends(get_current_user),

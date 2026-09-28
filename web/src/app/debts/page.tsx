@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
+import { money } from "@/lib/format";
 import { debtsApi } from "@/lib/debtsApi";
 import type { DebtView } from "@/lib/debtsTypes";
 import { usePolling } from "@/lib/usePolling";
@@ -12,13 +13,6 @@ import TabBar from "@/components/TabBar";
 
 const TABS = ["owing", "owed"] as const;
 type Tab = (typeof TABS)[number];
-
-function dollars(cents: number): string {
-  return `$${(cents / 100).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -60,7 +54,7 @@ function OwingRow({
           </p>
         </div>
         <p className="text-lg font-bold tabular text-danger">
-          {dollars(debt.amount_cents)}
+          {money(debt.amount_cents)}
         </p>
       </div>
       <div className="mt-2">
@@ -124,7 +118,7 @@ function OwedRow({
           </p>
         </div>
         <p className="text-lg font-bold tabular text-brand-strong">
-          {dollars(debt.amount_cents)}
+          {money(debt.amount_cents)}
         </p>
       </div>
       <div className="mt-2">
@@ -167,9 +161,13 @@ export default function DebtsPage() {
   const [tab, setTab] = useState<Tab>("owing");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const { data, error, setData } = usePolling(() => debtsApi.getMine(), 10000, [
-    user,
-  ]);
+  // Held until we know who's asking: the first poll used to go out before
+  // auth resolved and flash "Couldn't load debts." on every visit.
+  const { data, error, setData, refresh } = usePolling(() => debtsApi.getMine(), {
+    intervalMs: 10000,
+    deps: [user?.user_id],
+    enabled: !!user,
+  });
 
   useEffect(() => {
     if (checked && !user) router.replace("/");
@@ -203,6 +201,10 @@ export default function DebtsPage() {
           ),
         };
       });
+      // The optimistic patch above only covers this row; the next poll can
+      // carry knock-on changes (the other side acting too). usePolling
+      // drops any poll that set off before the patch, so it can't undo it.
+      refresh();
     } catch (e) {
       setActionError(
         e instanceof ApiError ? e.message : "That action didn't go through.",

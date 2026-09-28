@@ -5,7 +5,9 @@ button in the top-left. The current page (and active game) is mirrored into
 the URL query params so a refresh lands you back where you were.
 """
 
+import hmac
 import json
+import time
 from datetime import datetime
 from html import escape as _esc
 from uuid import uuid4
@@ -524,6 +526,9 @@ def _game_line(tracker_snap: dict) -> str:
 # ============== Passcode gate ==============
 
 
+_PASSCODE_FREE_TRIES = 5
+
+
 def render_passcode(expected: str):
     """Shared-PIN gate shown before any page when APP_PASSCODE is configured."""
     _, col, _ = st.columns([1, 1.2, 1])
@@ -543,10 +548,26 @@ def render_passcode(expected: str):
                 placeholder="Passcode",
             )
             if st.form_submit_button("Enter", type="primary", width="stretch"):
-                if entered == expected:
+                wait = st.session_state.get("passcode_locked_until", 0.0) - time.time()
+                if wait > 0:
+                    st.error(f"Too many attempts. Try again in {int(wait) + 1}s.")
+                elif hmac.compare_digest(entered.encode(), expected.encode()):
                     st.session_state.authed = True
+                    st.session_state.pop("passcode_fails", None)
                     st.rerun()
-                st.error("Wrong passcode.")
+                else:
+                    fails = st.session_state.get("passcode_fails", 0) + 1
+                    st.session_state.passcode_fails = fails
+                    if fails >= _PASSCODE_FREE_TRIES:
+                        # 30s, 60s, 120s ... capped at 15 minutes
+                        backoff = min(30 * 2 ** (fails - _PASSCODE_FREE_TRIES), 900)
+                        st.session_state.passcode_locked_until = time.time() + backoff
+                    st.error("Wrong passcode.")
+
+
+def admin_enabled() -> bool:
+    """Restore, delete and reset are only offered behind the passcode gate."""
+    return bool(db.secret("APP_PASSCODE"))
 
 
 # ============== Page: Home ==============
@@ -1114,7 +1135,7 @@ def _render_settings_games():
                 mime="text/csv",
                 key=f"dl_{aid[:8]}",
             )
-            if dcol2.button("Delete this game", key=f"del_{aid[:8]}"):
+            if admin_enabled() and dcol2.button("Delete this game", key=f"del_{aid[:8]}"):
                 db.archive_delete(aid)
                 st.toast("Game deleted")
                 st.rerun()
@@ -1129,20 +1150,23 @@ def _render_settings_games():
             key="backup_download",
             width="stretch",
         )
-        uploaded = st.file_uploader("Restore from backup", type=["json"], key="backup_upload")
-        confirm = st.checkbox("Replace ALL current data with this backup", key="backup_confirm")
-        if st.button("Restore", key="backup_restore", disabled=not (uploaded and confirm)):
-            try:
-                db.import_all(json.load(uploaded))
-            except (ValueError, KeyError, json.JSONDecodeError) as e:
-                st.error(f"Could not restore: {e}")
-            else:
-                for k in list(st.session_state.keys()):
-                    if k != "authed":
-                        del st.session_state[k]
-                st.toast("Backup restored")
-                st.rerun()
+        if admin_enabled():
+            uploaded = st.file_uploader("Restore from backup", type=["json"], key="backup_upload")
+            confirm = st.checkbox("Replace ALL current data with this backup", key="backup_confirm")
+            if st.button("Restore", key="backup_restore", disabled=not (uploaded and confirm)):
+                try:
+                    db.import_all(json.load(uploaded))
+                except (ValueError, KeyError, json.JSONDecodeError) as e:
+                    st.error(f"Could not restore: {e}")
+                else:
+                    for k in list(st.session_state.keys()):
+                        if k != "authed":
+                            del st.session_state[k]
+                    st.toast("Backup restored")
+                    st.rerun()
 
+    if not admin_enabled():
+        return
     st.markdown("---")
     with st.expander("Danger zone"):
         dcol1, dcol2 = st.columns(2)

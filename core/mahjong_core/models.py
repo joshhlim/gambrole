@@ -23,8 +23,16 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from taidi_core.models import Member, PlayerStats, RoomStatus
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
+from taidi_core.models import Member, PlayerStats, RoomStatus, is_replay
+
+# Caps on rule values. Generous for any real table; they exist so a typo
+# (or a hostile client) can't produce amounts that overflow storage, or a
+# max_tai large enough to stall the server building the table.
+MAX_TAI = 20
+MAX_TAI_PAYOUT = 1_000_000
+MAX_ACTION_CHIPS = 100_000
+MAX_BASE_CHIPS = 1_000_000
 
 
 class TaiPayout(BaseModel):
@@ -36,6 +44,16 @@ class TaiPayout(BaseModel):
 
     hu: int
     zimo: int
+
+    @model_validator(mode="after")
+    def _validate(self, info: ValidationInfo) -> TaiPayout:
+        # A validator rather than Field bounds so replay can skip it — see
+        # taidi_core.models.REPLAY.
+        if not is_replay(info) and not (
+            0 <= self.hu <= MAX_TAI_PAYOUT and 0 <= self.zimo <= MAX_TAI_PAYOUT
+        ):
+            raise ValueError(f"Tai payouts must be between 0 and {MAX_TAI_PAYOUT}.")
+        return self
 
 
 # "3/6 半" — the first real stakes table this app supports. Money is
@@ -70,7 +88,9 @@ class MahjongRules(BaseModel):
     tai_table: dict[int, TaiPayout] = Field(default_factory=lambda: dict(_DEFAULT_TAI_TABLE))
 
     @model_validator(mode="after")
-    def _validate(self) -> MahjongRules:
+    def _validate(self, info: ValidationInfo) -> MahjongRules:
+        if is_replay(info):
+            return self
         values = (
             self.base_chips,
             self.yao_chips,
@@ -80,8 +100,12 @@ class MahjongRules(BaseModel):
         )
         if min(values) < 0:
             raise ValueError("Rule values can't be negative.")
-        if self.max_tai < 1:
-            raise ValueError("max_tai must be at least 1.")
+        if self.base_chips > MAX_BASE_CHIPS or max(values[1:]) > MAX_ACTION_CHIPS:
+            raise ValueError("Rule values are too large.")
+        if not 1 <= self.max_tai <= MAX_TAI:
+            raise ValueError(f"max_tai must be between 1 and {MAX_TAI}.")
+        if len(self.tai_table) > MAX_TAI or any(not 1 <= t <= MAX_TAI for t in self.tai_table):
+            raise ValueError(f"tai_table levels must be between 1 and {MAX_TAI}.")
         missing = [t for t in range(1, self.max_tai + 1) if t not in self.tai_table]
         if missing:
             raise ValueError(f"tai_table is missing entries for tai={missing}.")

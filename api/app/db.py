@@ -27,6 +27,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from sqlalchemy import (
+    BigInteger,
     Column,
     DateTime,
     ForeignKey,
@@ -37,6 +38,7 @@ from sqlalchemy import (
     String,
     Table,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -60,6 +62,10 @@ rooms = Table(
     # Denormalized from RoomState.status/.ended_at — see module docstring.
     Column("status", String(16), nullable=False, server_default="lobby"),
     Column("ended_at", DateTime(timezone=True), nullable=True),
+    # Rules chosen on the create screen, used when the host starts without
+    # sending any (see events_store.RoomMeta). Null for rooms created
+    # before this existed, or created without rules.
+    Column("draft_rules", JSONB, nullable=True),
     Index("ix_rooms_host_id", "host_id"),
 )
 
@@ -124,6 +130,15 @@ friendships = Table(
     # transiently, and friends_service resolves it by auto-accepting when two
     # people request each other.
     UniqueConstraint("requester_id", "addressee_id", name="uq_friendships_pair"),
+    # One row per pair of people regardless of direction. Without it, two
+    # people requesting each other at the same moment both saw no row and
+    # both inserted, and unfriending then deleted only one of the two.
+    Index(
+        "uq_friendships_unordered_pair",
+        func.least(Column("requester_id"), Column("addressee_id")),
+        func.greatest(Column("requester_id"), Column("addressee_id")),
+        unique=True,
+    ),
     Index("ix_friendships_requester", "requester_id"),
     Index("ix_friendships_addressee", "addressee_id"),
 )
@@ -141,8 +156,10 @@ settlements = Table(
     # Already-converted real cents at insert time (mahjong chips have been
     # multiplied by MAHJONG_CHIP_VALUE_CENTS) — this is a ledger entry, not
     # a recomputed display metric, so it must not reprice itself if that
-    # constant is ever tuned later.
-    Column("amount_cents", Integer, nullable=False),
+    # constant is ever tuned later. 64-bit: a whole night's net between two
+    # players is a sum of many rounds, and an overflow here would make a
+    # game impossible to end.
+    Column("amount_cents", BigInteger, nullable=False),
     Column("status", String(16), nullable=False, server_default="pending"),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
@@ -165,6 +182,10 @@ engine = create_async_engine(
     # connection between statements under that mode, and asyncpg errors
     # with "prepared statement already exists" without this.
     connect_args={"statement_cache_size": 0},
+    # Checks a pooled connection is alive before handing it out. The pooler
+    # drops idle connections, and without this the first request after a
+    # quiet spell fails instead of reconnecting.
+    pool_pre_ping=True,
 )
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 

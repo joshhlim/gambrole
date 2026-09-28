@@ -27,7 +27,8 @@ st.set_page_config(
 db.init_db()
 ui.inject_css()
 
-# Optional shared passcode (set APP_PASSCODE in secrets to enable)
+# Optional shared passcode (set APP_PASSCODE in secrets to enable). Without
+# it, the destructive admin actions in Settings are hidden (ui.admin_enabled).
 _passcode = db.secret("APP_PASSCODE")
 if _passcode and not st.session_state.get("authed"):
     ui.render_passcode(str(_passcode))

@@ -205,6 +205,26 @@ again later without touching history.
   the new one has been tested. Maybe later, only if polling still feels
   slow: a per-process folded-state cache plus "unchanged since seq N"
   poll responses.
-- `web/e2e` is broken since `d56fb01`: every spec waits for a
-  "Signed in as …" line the home page no longer renders. Needs its sign-in
-  helper updated before it can verify anything again.
+- Whole-codebase audit pass (2026-09-28, see CHANGELOG [Unreleased]) is
+  done and green locally (ruff, mypy, legacy/core/api pytest, e2e 12/12,
+  alembic round-trip + check). Things only the user can do, still open as
+  of that date:
+  - Add GitHub secrets `BACKUP_DATABASE_URL` (Supabase Session pooler URI,
+    plain `postgresql://`) and `BACKUP_PASSPHRASE` for `backup.yml`.
+  - Set up an external pinger (cron-job.org / UptimeRobot) on
+    `https://gambrole-api-sg.onrender.com/readyz` every 5-10 min during
+    15:00-03:00 SGT — GitHub's cron only delivered ~3 runs/day.
+  - Confirm the Render Blueprint synced `buildFilter`, `autoDeployTrigger:
+    checksPass` and `PYTHON_VERSION`. Note checksPass means a red CI on
+    main now blocks API deploys.
+  - Turn on Dependabot alerts, secret scanning and branch protection
+    (repo is public); close the Dependabot PRs superseded by the new
+    grouped config.
+  - Delete the old Oregon `gambrole-api` Render service.
+  - Decide whether to retire the legacy Streamlit app (now hardened: admin
+    actions hidden without `APP_PASSCODE`, throttled passcode).
+  - Vercel builds now fail if `NEXT_PUBLIC_API_URL` is unset — make sure
+    it's set for Preview as well as Production if previews are used.
+- Deliberately not done in the audit pass: lazy-loading supabase-js (the
+  password-recovery listener needs the client at module load), Sentry-style
+  error reporting (needs an account), API versioning.

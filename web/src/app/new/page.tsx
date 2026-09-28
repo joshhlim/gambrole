@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
-import type { GameRules, GameType } from "@/lib/types";
+import type { AnyRoomState, GameRules, GameType } from "@/lib/types";
 import type { MahjongRules, TaiPayout } from "@/lib/mahjongTypes";
 
 const DEFAULT_RULES: GameRules = {
@@ -75,14 +75,218 @@ const GAMES = [
 type GameId = (typeof GAMES)[number]["id"];
 
 const inputCls =
-  "w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-brand-strong";
+  "w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-brand-strong aria-invalid:border-danger";
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+// ---------------------------------------------------------------------------
+// The form keeps every number as the raw string typed. Parsing on each
+// keystroke (Number(v) || 0) clobbered half-typed values like "0." and
+// silently turned "-3" or "1.5" into something else; now what you typed
+// stays on screen and is checked against the same limits the API enforces.
+
+type Check = { value: number; error: null } | { value: null; error: string };
+
+function wholeNumber(raw: string, min: number, max: number): Check {
+  const t = raw.trim();
+  if (t === "") return { value: null, error: "Required" };
+  if (!/^\d+$/.test(t)) return { value: null, error: "Whole number" };
+  const n = Number(t);
+  if (n < min || n > max) return { value: null, error: `${min}–${max.toLocaleString()}` };
+  return { value: n, error: null };
+}
+
+/** Dollars in, cents out: at most two decimals, $0–$100. */
+function dollarsToCents(raw: string): Check {
+  const t = raw.trim();
+  if (t === "") return { value: null, error: "Required" };
+  if (!/^\d*(\.\d{0,2})?$/.test(t) || t === ".") return { value: null, error: "e.g. 0.20" };
+  const cents = Math.round(Number(t) * 100);
+  if (cents > 10000) return { value: null, error: "Max $100.00" };
+  return { value: cents, error: null };
+}
+
+const str = (n: number) => String(n);
+
+interface TaidiForm {
+  cardValue: string;
+  baseCards: string;
+  multipliers: boolean;
+  double: string;
+  triple: string;
+  difference: boolean;
+  specials: boolean;
+  specialCards: string;
+}
+
+const TAIDI_FORM: TaidiForm = {
+  cardValue: (DEFAULT_RULES.card_value_cents / 100).toFixed(2),
+  baseCards: str(DEFAULT_RULES.base_cards),
+  multipliers: DEFAULT_RULES.multipliers_enabled,
+  double: str(DEFAULT_RULES.double_threshold),
+  triple: str(DEFAULT_RULES.triple_threshold),
+  difference: DEFAULT_RULES.difference_payouts,
+  specials: DEFAULT_RULES.special_hands_enabled,
+  specialCards: str(DEFAULT_RULES.special_hand_cards),
+};
+
+function checkTaidi(f: TaidiForm) {
+  const errors = {
+    cardValue: dollarsToCents(f.cardValue).error,
+    baseCards: wholeNumber(f.baseCards, 0, 52).error,
+    double: null as string | null,
+    triple: null as string | null,
+    specialCards: null as string | null,
+  };
+  const cents = dollarsToCents(f.cardValue).value;
+  const base = wholeNumber(f.baseCards, 0, 52).value;
+  // Thresholds and the special-hand count only matter when their toggle is
+  // on; while it's off they aren't checked and the defaults go instead.
+  let double = DEFAULT_RULES.double_threshold;
+  let triple = DEFAULT_RULES.triple_threshold;
+  if (f.multipliers) {
+    const d = wholeNumber(f.double, 1, 52);
+    const t = wholeNumber(f.triple, 1, 52);
+    errors.double = d.error;
+    errors.triple = t.error ?? (d.value !== null && t.value! < d.value ? "At least ×2's" : null);
+    double = d.value ?? double;
+    triple = t.value ?? triple;
+  }
+  let special = DEFAULT_RULES.special_hand_cards;
+  if (f.specials) {
+    const sp = wholeNumber(f.specialCards, 0, 52);
+    errors.specialCards = sp.error;
+    special = sp.value ?? special;
+  }
+  const valid = Object.values(errors).every((e) => e === null);
+  const rules: GameRules | null =
+    valid && cents !== null && base !== null
+      ? {
+          card_value_cents: cents,
+          base_cards: base,
+          multipliers_enabled: f.multipliers,
+          double_threshold: double,
+          triple_threshold: triple,
+          difference_payouts: f.difference,
+          special_hands_enabled: f.specials,
+          special_hand_cards: special,
+        }
+      : null;
+  return { errors, rules };
+}
+
+const MAX_TAI_LIMIT = 20;
+
+interface MahjongForm {
+  base: string;
+  yao: string;
+  gang: string;
+  zimoBonus: string;
+  klppdd: string;
+  maxTai: number;
+  table: Record<string, { hu: string; zimo: string }>;
+}
+
+function mahjongForm(r: MahjongRules): MahjongForm {
+  const table: MahjongForm["table"] = {};
+  for (const [tai, p] of Object.entries(r.tai_table)) {
+    table[tai] = { hu: str(p.hu), zimo: str(p.zimo) };
+  }
+  return {
+    base: str(r.base_chips),
+    yao: str(r.yao_chips),
+    gang: str(r.gang_chips),
+    zimoBonus: str(r.zimo_bonus_chips),
+    klppdd: str(r.klppdd_chips),
+    maxTai: r.max_tai,
+    table,
+  };
+}
+
+function checkMahjong(f: MahjongForm) {
+  const base = wholeNumber(f.base, 0, 1_000_000);
+  const yao = wholeNumber(f.yao, 0, 100_000);
+  const gang = wholeNumber(f.gang, 0, 100_000);
+  const zimoBonus = wholeNumber(f.zimoBonus, 0, 100_000);
+  const klppdd = wholeNumber(f.klppdd, 0, 100_000);
+  const rows: Record<string, { hu: Check; zimo: Check }> = {};
+  for (let t = 1; t <= f.maxTai; t++) {
+    const row = f.table[t] ?? { hu: "", zimo: "" };
+    rows[t] = { hu: wholeNumber(row.hu, 0, 1_000_000), zimo: wholeNumber(row.zimo, 0, 1_000_000) };
+  }
+  const all = [base, yao, gang, zimoBonus, klppdd, ...Object.values(rows).flatMap((r) => [r.hu, r.zimo])];
+  const valid = all.every((c) => c.error === null);
+  const rules: MahjongRules | null = valid
+    ? {
+        base_chips: base.value!,
+        yao_chips: yao.value!,
+        gang_chips: gang.value!,
+        zimo_bonus_chips: zimoBonus.value!,
+        klppdd_chips: klppdd.value!,
+        max_tai: f.maxTai,
+        tai_table: Object.fromEntries(
+          Object.entries(rows).map(([t, r]) => [t, { hu: r.hu.value!, zimo: r.zimo.value! }]),
+        ),
+      }
+    : null;
+  return {
+    errors: {
+      base: base.error,
+      yao: yao.error,
+      gang: gang.error,
+      zimoBonus: zimoBonus.error,
+      klppdd: klppdd.error,
+      rows: Object.fromEntries(
+        Object.entries(rows).map(([t, r]) => [t, { hu: r.hu.error, zimo: r.zimo.error }]),
+      ),
+    },
+    rules,
+  };
+}
+
+function Field({
+  label,
+  error,
+  children,
+}: {
+  label: string;
+  error?: string | null;
+  children: React.ReactNode;
+}) {
   return (
-    <label className="block">
+    <label className="block min-w-0">
       <span className="block text-xs text-muted mb-1">{label}</span>
       {children}
+      {error && <span className="mt-0.5 block text-[11px] text-danger">{error}</span>}
     </label>
+  );
+}
+
+/** A number field over a raw string — see the note above TaidiForm. */
+function NumberInput({
+  value,
+  onChange,
+  error,
+  testId,
+  decimal,
+  label,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  error?: string | null;
+  testId?: string;
+  decimal?: boolean;
+  label?: string;
+}) {
+  return (
+    <input
+      type="text"
+      inputMode={decimal ? "decimal" : "numeric"}
+      data-testid={testId}
+      aria-label={label}
+      aria-invalid={error ? true : undefined}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={inputCls}
+    />
   );
 }
 
@@ -108,12 +312,26 @@ function Toggle({
   );
 }
 
+/** Stashes the just-created room for the room page's first paint. Best
+ * effort: the room exists either way, so a storage failure (private mode,
+ * quota) must not turn into "Couldn't create a room". */
+function stashFreshState(state: AnyRoomState) {
+  try {
+    sessionStorage.setItem(
+      `gambrole_state_${state.room_id}`,
+      JSON.stringify({ at: Date.now(), state }),
+    );
+  } catch {
+    /* the room page just fetches it instead */
+  }
+}
+
 export default function NewRoomPage() {
   const router = useRouter();
   const { user, checked } = useStoredUser();
   const [selected, setSelected] = useState<GameId | null>(null);
-  const [rules, setRules] = useState<GameRules>(DEFAULT_RULES);
-  const [mahjongRules, setMahjongRules] = useState<MahjongRules>(DEFAULT_MAHJONG_RULES);
+  const [taidi, setTaidi] = useState<TaidiForm>(TAIDI_FORM);
+  const [mahjong, setMahjong] = useState<MahjongForm>(() => mahjongForm(DEFAULT_MAHJONG_RULES));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -124,58 +342,58 @@ export default function NewRoomPage() {
     if (checked && !user) router.replace("/");
   }, [checked, user, router]);
 
-  function set<K extends keyof GameRules>(key: K, value: GameRules[K]) {
-    setRules((r) => ({ ...r, [key]: value }));
+  const taidiCheck = useMemo(() => checkTaidi(taidi), [taidi]);
+  const mahjongCheck = useMemo(() => checkMahjong(mahjong), [mahjong]);
+
+  function setT<K extends keyof TaidiForm>(key: K, value: TaidiForm[K]) {
+    setTaidi((f) => ({ ...f, [key]: value }));
   }
 
-  function setMahjong<K extends keyof MahjongRules>(key: K, value: MahjongRules[K]) {
-    setMahjongRules((r) => ({ ...r, [key]: value }));
+  function setM<K extends keyof MahjongForm>(key: K, value: MahjongForm[K]) {
+    setMahjong((f) => ({ ...f, [key]: value }));
   }
 
-  function setTaiRow(tai: number, field: keyof TaiPayout, value: number) {
-    setMahjongRules((r) => ({
-      ...r,
-      tai_table: {
-        ...r.tai_table,
-        [tai]: { ...(r.tai_table[tai] ?? { hu: 0, zimo: 0 }), [field]: value },
-      },
+  function setTaiRow(tai: number, field: "hu" | "zimo", value: string) {
+    setMahjong((f) => ({
+      ...f,
+      table: { ...f.table, [tai]: { ...(f.table[tai] ?? { hu: "0", zimo: "0" }), [field]: value } },
     }));
   }
 
   function setMaxTai(newMax: number) {
-    setMahjongRules((r) => {
-      const table = { ...r.tai_table };
-      for (let t = r.max_tai + 1; t <= newMax; t++) {
-        table[t] = table[t] ?? { hu: 0, zimo: 0 };
+    setMahjong((f) => {
+      const table = { ...f.table };
+      for (let t = f.maxTai + 1; t <= newMax; t++) {
+        table[t] = table[t] ?? { hu: "0", zimo: "0" };
       }
-      return { ...r, max_tai: newMax, tai_table: table };
+      return { ...f, maxTai: newMax, table };
     });
   }
 
   async function handleCreate(gameType: GameType) {
+    const rules = gameType === "mahjong" ? mahjongCheck.rules : taidiCheck.rules;
+    if (!rules) return;
     setBusy(true);
     setError(null);
+    let created: AnyRoomState;
     try {
-      // The room only takes rules at start_game time (once the lobby is
-      // full), so we hold onto what was configured here until then.
-      const created = await api.createRoom(gameType);
-      const chosenRules = gameType === "mahjong" ? mahjongRules : rules;
-      sessionStorage.setItem(`gambrole_rules_${created.room_id}`, JSON.stringify(chosenRules));
-      // POST /rooms already returned the full room — hand it to the room
-      // page so it can render without waiting on a fetch that would tell it
-      // exactly what we already know. Stamped so a stale one is ignored.
-      sessionStorage.setItem(
-        `gambrole_state_${created.room_id}`,
-        JSON.stringify({ at: Date.now(), state: created }),
-      );
-      router.push(`/room/${created.room_id}?g=${gameType}`);
+      created = await api.createRoom(gameType, rules);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Couldn't create a room.");
       setBusy(false);
+      return;
     }
+    // POST /rooms already returned the full room — hand it to the room page
+    // so it can render without waiting on a fetch that would tell it exactly
+    // what we already know.
+    stashFreshState(created);
+    router.push(`/room/${created.room_id}?g=${gameType}`);
   }
 
   if (!user) return null;
+
+  const me = mahjongCheck.errors;
+  const te = taidiCheck.errors;
 
   return (
     <main className="flex-1 px-5 py-8 max-w-md mx-auto w-full">
@@ -183,6 +401,7 @@ export default function NewRoomPage() {
         <button
           onClick={() => (selected ? setSelected(null) : router.push("/"))}
           data-testid="back-btn"
+          aria-label="Back"
           className="h-11 w-11 rounded-full border border-border flex items-center justify-center text-lg font-bold text-brand"
         >
           ←
@@ -221,7 +440,7 @@ export default function NewRoomPage() {
               {MAHJONG_PRESETS.map((p) => (
                 <button
                   key={p.label}
-                  onClick={() => setMahjongRules(p.rules)}
+                  onClick={() => setMahjong(mahjongForm(p.rules))}
                   data-testid={`mahjong-preset-${p.label.toLowerCase().replace(/\s+/g, "-")}`}
                   className="rounded-xl border border-border bg-surface px-2 py-2 text-xs font-semibold"
                 >
@@ -232,59 +451,32 @@ export default function NewRoomPage() {
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-            <Field label="Base chips">
-              <input
-                type="number"
-                min={0}
-                data-testid="rule-base"
-                value={mahjongRules.base_chips}
-                onChange={(e) => setMahjong("base_chips", Math.max(0, Number(e.target.value) || 0))}
-                className={inputCls}
-              />
+            <Field label="Base chips" error={me.base}>
+              <NumberInput testId="rule-base" value={mahjong.base} error={me.base} onChange={(v) => setM("base", v)} />
             </Field>
-            <Field label="咬 YAO">
-              <input
-                type="number"
-                min={0}
-                data-testid="rule-yao"
-                value={mahjongRules.yao_chips}
-                onChange={(e) => setMahjong("yao_chips", Math.max(0, Number(e.target.value) || 0))}
-                className={inputCls}
-              />
+            <Field label="咬 YAO" error={me.yao}>
+              <NumberInput testId="rule-yao" value={mahjong.yao} error={me.yao} onChange={(v) => setM("yao", v)} />
             </Field>
-            <Field label="槓 GANG">
-              <input
-                type="number"
-                min={0}
-                data-testid="rule-gang"
-                value={mahjongRules.gang_chips}
-                onChange={(e) => setMahjong("gang_chips", Math.max(0, Number(e.target.value) || 0))}
-                className={inputCls}
-              />
+            <Field label="槓 GANG" error={me.gang}>
+              <NumberInput testId="rule-gang" value={mahjong.gang} error={me.gang} onChange={(v) => setM("gang", v)} />
             </Field>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Zimo bonus (optional)">
-              <input
-                type="number"
-                min={0}
-                data-testid="rule-zimo-bonus"
-                value={mahjongRules.zimo_bonus_chips}
-                onChange={(e) =>
-                  setMahjong("zimo_bonus_chips", Math.max(0, Number(e.target.value) || 0))
-                }
-                className={inputCls}
+            <Field label="Zimo bonus (optional)" error={me.zimoBonus}>
+              <NumberInput
+                testId="rule-zimo-bonus"
+                value={mahjong.zimoBonus}
+                error={me.zimoBonus}
+                onChange={(v) => setM("zimoBonus", v)}
               />
             </Field>
-            <Field label="KLPPDD (optional)">
-              <input
-                type="number"
-                min={0}
-                data-testid="rule-klppdd"
-                value={mahjongRules.klppdd_chips}
-                onChange={(e) => setMahjong("klppdd_chips", Math.max(0, Number(e.target.value) || 0))}
-                className={inputCls}
+            <Field label="KLPPDD (optional)" error={me.klppdd}>
+              <NumberInput
+                testId="rule-klppdd"
+                value={mahjong.klppdd}
+                error={me.klppdd}
+                onChange={(v) => setM("klppdd", v)}
               />
             </Field>
           </div>
@@ -295,50 +487,59 @@ export default function NewRoomPage() {
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setMaxTai(Math.max(1, mahjongRules.max_tai - 1))}
-                  disabled={mahjongRules.max_tai <= 1}
+                  onClick={() => setMaxTai(Math.max(1, mahjong.maxTai - 1))}
+                  disabled={mahjong.maxTai <= 1}
                   data-testid="tai-row-remove"
-                  className="h-7 w-7 rounded-full border border-border text-sm font-bold text-brand disabled:opacity-30"
+                  aria-label="Remove a tai level"
+                  className="h-11 w-11 rounded-full border border-border text-base font-bold text-brand disabled:opacity-30"
                 >
                   −
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMaxTai(mahjongRules.max_tai + 1)}
+                  onClick={() => setMaxTai(Math.min(MAX_TAI_LIMIT, mahjong.maxTai + 1))}
+                  disabled={mahjong.maxTai >= MAX_TAI_LIMIT}
                   data-testid="tai-row-add"
-                  className="h-7 w-7 rounded-full border border-border text-sm font-bold text-brand"
+                  aria-label="Add a tai level"
+                  className="h-11 w-11 rounded-full border border-border text-base font-bold text-brand disabled:opacity-30"
                 >
                   +
                 </button>
               </div>
             </div>
-            <div className="grid grid-cols-[2.5rem_1fr_1fr] gap-2 items-center px-1 mb-1">
+            <div className="grid grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,1fr)] gap-2 items-center px-1 mb-1">
               <span />
               <span className="text-xs text-muted">Hu</span>
               <span className="text-xs text-muted">Zimo (each)</span>
             </div>
             <div className="space-y-2">
-              {Array.from({ length: mahjongRules.max_tai }, (_, i) => i + 1).map((tai) => (
-                <div key={tai} className="grid grid-cols-[2.5rem_1fr_1fr] gap-2 items-center">
-                  <span className="text-xs font-semibold text-brand">{tai}台</span>
-                  <input
-                    type="number"
-                    min={0}
-                    data-testid={`rule-tai-${tai}-hu`}
-                    value={mahjongRules.tai_table[tai]?.hu ?? 0}
-                    onChange={(e) => setTaiRow(tai, "hu", Math.max(0, Number(e.target.value) || 0))}
-                    className={inputCls}
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    data-testid={`rule-tai-${tai}-zimo`}
-                    value={mahjongRules.tai_table[tai]?.zimo ?? 0}
-                    onChange={(e) => setTaiRow(tai, "zimo", Math.max(0, Number(e.target.value) || 0))}
-                    className={inputCls}
-                  />
-                </div>
-              ))}
+              {Array.from({ length: mahjong.maxTai }, (_, i) => i + 1).map((tai) => {
+                const rowErr = me.rows[tai];
+                return (
+                  <div key={tai}>
+                    <div className="grid grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,1fr)] gap-2 items-center">
+                      <span className="text-xs font-semibold text-brand">{tai}台</span>
+                      <NumberInput
+                        testId={`rule-tai-${tai}-hu`}
+                        label={`${tai} tai hu`}
+                        value={mahjong.table[tai]?.hu ?? ""}
+                        error={rowErr?.hu}
+                        onChange={(v) => setTaiRow(tai, "hu", v)}
+                      />
+                      <NumberInput
+                        testId={`rule-tai-${tai}-zimo`}
+                        label={`${tai} tai zimo`}
+                        value={mahjong.table[tai]?.zimo ?? ""}
+                        error={rowErr?.zimo}
+                        onChange={(v) => setTaiRow(tai, "zimo", v)}
+                      />
+                    </div>
+                    {(rowErr?.hu || rowErr?.zimo) && (
+                      <p className="mt-0.5 pl-12 text-[11px] text-danger">{rowErr.hu ?? rowErr.zimo}</p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -346,7 +547,7 @@ export default function NewRoomPage() {
 
           <button
             onClick={() => handleCreate("mahjong")}
-            disabled={busy}
+            disabled={busy || !mahjongCheck.rules}
             data-testid="create-room-btn"
             className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
           >
@@ -356,51 +557,46 @@ export default function NewRoomPage() {
       ) : (
         <div className="space-y-5">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Value per card ($)">
-              <input
-                type="number"
-                step={0.05}
-                min={0}
-                data-testid="rule-card-value"
-                value={rules.card_value_cents / 100}
-                onChange={(e) => set("card_value_cents", Math.round((Number(e.target.value) || 0) * 100))}
-                className={inputCls}
+            <Field label="Value per card ($)" error={te.cardValue}>
+              <NumberInput
+                decimal
+                testId="rule-card-value"
+                value={taidi.cardValue}
+                error={te.cardValue}
+                onChange={(v) => setT("cardValue", v)}
               />
             </Field>
-            <Field label="Base cards to winner">
-              <input
-                type="number"
-                min={0}
-                value={rules.base_cards}
-                onChange={(e) => set("base_cards", Number(e.target.value) || 0)}
-                className={inputCls}
+            <Field label="Base cards to winner" error={te.baseCards}>
+              <NumberInput
+                testId="rule-base-cards"
+                value={taidi.baseCards}
+                error={te.baseCards}
+                onChange={(v) => setT("baseCards", v)}
               />
             </Field>
           </div>
 
           <Toggle
             label="Double / triple penalties"
-            checked={rules.multipliers_enabled}
-            onChange={(v) => set("multipliers_enabled", v)}
+            checked={taidi.multipliers}
+            onChange={(v) => setT("multipliers", v)}
           />
-          {rules.multipliers_enabled && (
+          {taidi.multipliers && (
             <div className="grid grid-cols-2 gap-3">
-              <Field label="×2 at ≥">
-                <input
-                  type="number"
-                  min={1}
-                  value={rules.double_threshold}
-                  onChange={(e) => set("double_threshold", Number(e.target.value) || 1)}
-                  className={inputCls}
+              <Field label="×2 at ≥" error={te.double}>
+                <NumberInput
+                  testId="rule-double"
+                  value={taidi.double}
+                  error={te.double}
+                  onChange={(v) => setT("double", v)}
                 />
               </Field>
-              <Field label="×3 at ≥">
-                <input
-                  type="number"
-                  min={1}
-                  value={rules.triple_threshold}
-                  onChange={(e) => set("triple_threshold", Number(e.target.value) || 1)}
-                  className={inputCls}
+              <Field label="×3 at ≥" error={te.triple}>
+                <NumberInput
+                  testId="rule-triple"
+                  value={taidi.triple}
+                  error={te.triple}
+                  onChange={(v) => setT("triple", v)}
                 />
               </Field>
             </div>
@@ -408,23 +604,22 @@ export default function NewRoomPage() {
 
           <Toggle
             label="Difference payouts between losers"
-            checked={rules.difference_payouts}
-            onChange={(v) => set("difference_payouts", v)}
+            checked={taidi.difference}
+            onChange={(v) => setT("difference", v)}
           />
 
           <Toggle
             label="Special hands"
-            checked={rules.special_hands_enabled}
-            onChange={(v) => set("special_hands_enabled", v)}
+            checked={taidi.specials}
+            onChange={(v) => setT("specials", v)}
           />
-          {rules.special_hands_enabled && (
-            <Field label="Cards per special hand">
-              <input
-                type="number"
-                min={1}
-                value={rules.special_hand_cards}
-                onChange={(e) => set("special_hand_cards", Number(e.target.value) || 1)}
-                className={inputCls}
+          {taidi.specials && (
+            <Field label="Cards per special hand" error={te.specialCards}>
+              <NumberInput
+                testId="rule-special-cards"
+                value={taidi.specialCards}
+                error={te.specialCards}
+                onChange={(v) => setT("specialCards", v)}
               />
             </Field>
           )}
@@ -433,7 +628,7 @@ export default function NewRoomPage() {
 
           <button
             onClick={() => handleCreate("taidi")}
-            disabled={busy}
+            disabled={busy || !taidiCheck.rules}
             data-testid="create-room-btn"
             className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
           >

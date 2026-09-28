@@ -1,33 +1,34 @@
 {
-  "name": "Python 3",
-  // Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-  "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bookworm",
+  // Whole-repo dev environment: core/ + api/ (Python 3.13, same as CI and
+  // Render), web/ (Node 22), the legacy Streamlit app, and Docker for the
+  // local Postgres in docker-compose.yml.
+  //   docker compose up -d postgres
+  //   cd api && python -m alembic upgrade head && python -m uvicorn app.main:app --reload
+  //   cd web && npm run dev -- --port 3100
+  //   streamlit run taidi.py   (legacy app)
+  "name": "GamBROle",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.13-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
   "customizations": {
-    "codespaces": {
-      "openFiles": [
-        "README.md",
-        "taidi.py"
-      ]
-    },
     "vscode": {
-      "settings": {},
       "extensions": [
         "ms-python.python",
-        "ms-python.vscode-pylance"
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff"
       ]
     }
   },
-  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
-  "postAttachCommand": {
-    "server": "streamlit run taidi.py --server.enableCORS false --server.enableXsrfProtection false"
+  "postCreateCommand": "pip install -r requirements-dev.txt && (cd web && npm ci)",
+  "containerEnv": {
+    "TAIDI_AUTH_MODE": "dev"
   },
+  "forwardPorts": [3100, 8000, 8501],
   "portsAttributes": {
-    "8501": {
-      "label": "Application",
-      "onAutoForward": "openPreview"
-    }
-  },
-  "forwardPorts": [
-    8501
-  ]
+    "3100": { "label": "web" },
+    "8000": { "label": "api" },
+    "8501": { "label": "legacy Streamlit" }
+  }
 }

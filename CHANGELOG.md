@@ -30,11 +30,78 @@ All notable changes to this project are documented here. The format follows
   sits left of your name — so they're now anchored to the top bar and
   capped at its width.
 
+- Whole-codebase audit fixes (2026-09-28):
+  - **Commands can't land on the wrong round or hand.** Round/hand-scoped
+    commands (Taidi win/special/undo, Mahjong yao/gang/hu/no-win/continue)
+    now name the round or hand they're about and are refused if it moved
+    on; the client no longer blindly retries them. Previously an "Undo win
+    claim" racing the last card count voided the round that had just paid
+    out, and two simultaneous "No Win"s closed two hands.
+  - **Double taps can't double-charge** (GangFlow seat taps charged twice).
+  - **Mahjong seats**: a player joining after someone left the lobby could
+    share a seat, so declaring against a seat charged the wrong person.
+    New joiners take the lowest free seat; starting requires seats 0-3.
+  - **Mahjong seat swap** never worked (the lobby sent 2 seats, the engine
+    demanded 4); partial swaps are now merged.
+  - **Mahjong End and No Win** are confirm-gated, and the back arrow no
+    longer leaves/disbands the lobby.
+  - **Rules chosen at creation are saved server-side** (`rooms.draft_rules`)
+    instead of in the host's tab, and are shown in the lobby and at the
+    table. Before, reopening the lobby elsewhere silently started the game
+    on default stakes.
+  - **Input limits**: card counts 1-52 and caps on every rule value. A huge
+    count used to overflow the 32-bit settlements column (now 64-bit),
+    making the game impossible to end and locking its members out; a huge
+    `max_tai` could stall the server. Limits apply to new input only —
+    replaying an older game never re-judges its rules.
+  - **Engine**: undoing a special hand after someone stepped out reversed
+    the wrong payments; a special in the new round blocked undoing the
+    previous one; stepped-out players could still void; `continue_wind`
+    was accepted after the game ended; past wind 4 the host is now asked
+    again at each wind's end (as documented); stats name players who
+    stepped out; open-hand money counts in the Mahjong profit breakdown.
+  - **Security/privacy**: finished games are visible only to the people in
+    them (403 otherwise); removing a friend could leave the friendship in
+    place after a request race (one row per pair now, enforced); unknown
+    JWT key ids can no longer force a blocking JWKS fetch per request;
+    tokens must carry `exp`/`sub`; email addresses are never used as
+    display names or to build usernames; rate limits on invite-code,
+    username and user lookups and dev login; 64 KB request cap.
+  - **Robustness**: one room that fails to replay no longer locks its
+    members out of creating/joining rooms; two members closing the same
+    stale room at once no longer 500s; `rooms.status` is corrected lazily
+    for rooms from before that column existed; username races return 409;
+    over-long display names are trimmed.
+  - **Web**: poll errors are shown (not found / not in this game /
+    reconnecting) with backoff, a pause while hidden, and no re-render when
+    nothing changed; expired Supabase tokens refresh and retry; requests
+    time out after 12s; a failed game-type lookup no longer crashes a
+    Mahjong room as Taidi; the password-reset link no longer fails on a
+    double code exchange; Mahjong table fits 320px phones; no iOS input
+    zoom; charts don't block scrolling; WCAG AA contrast; PWA icons;
+    previous account's data cleared on sign-out.
+  - **Tests/CI**: tests can no longer wipe a non-local database (and the
+    legacy tests can't reach a real Turso database); the e2e suite is
+    rewritten for the current UI and green; new randomized whole-game
+    simulations for both engines check zero-sum, unique seats, replay
+    equality and cached-transfer recomputation; CI runs `alembic check`.
+
 ### Changed
+- `TAIDI_AUTH_MODE` has no default: the API refuses to start without it
+  (dev mode trusts a secret committed to the repo, so a missing setting
+  must not silently enable it). Migrations and scripts don't need it.
+- New `GET /readyz` (runs `SELECT 1`); `/healthz` stays shallow.
+- Both room routers share one command pipeline (`app/dispatch.py`).
+- Python dependencies are pinned in `api/requirements.lock` (regenerate
+  with `scripts/lock_api_deps.sh`); Render and CI install from it. Render
+  now redeploys on `core/` changes and waits for CI to pass.
+- Weekly encrypted database backup workflow (`backup.yml`; needs secrets).
+- Web: room logic shared between Taidi and Mahjong (`useRoom`,
+  `RoomShell`); one money formatter; one API URL config.
 - Stats (`/stats/me`, `/stats/facts`) and game history (`/history/me`) load
   every past room in two queries (`events_store.rebuild_many`) instead of
   two serial queries per room — at ~110ms per statement, 30 past games had
-  cost over 6s before any work started.
+  cost over 6s before any work started. `/debts/me` now does the same.
 
 ## [0.6.1] - 2026-09-08
 

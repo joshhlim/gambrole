@@ -1,9 +1,14 @@
+# Everything for local development and CI: the legacy Streamlit app, the
+# API's exact runtime pins (the same lock Render installs), the two local
+# packages editable, and exact versions of the dev tools so a new ruff/mypy
+# release can't turn CI red on its own. Dependabot proposes bumps.
 -r requirements.txt
+-r api/requirements.lock
 -e ./core
--e ./api
 -e ./api[dev]
-pytest>=8
-pytest-asyncio>=0.24
-ruff>=0.6
-mypy>=1.10
-hypothesis>=6.100
+pytest==9.1.1
+pytest-asyncio==1.4.0
+ruff==0.16.6
+mypy==2.3.1
+hypothesis==6.167.1
+httpx==0.28.1

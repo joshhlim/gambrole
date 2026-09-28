@@ -50,7 +50,12 @@ export default function SplitDonut({
   return (
     <ChartFrame title={title} testId={testId}>
       <div className="flex items-center gap-3" onPointerLeave={clear}>
-        <svg viewBox={`0 0 ${SIZE} ${SIZE}`} className="h-28 w-28 shrink-0 touch-none" role="img">
+        <svg
+          viewBox={`0 0 ${SIZE} ${SIZE}`}
+          className="h-28 w-28 shrink-0 touch-pan-y"
+          role="img"
+          aria-label={`${title}: ${arcs.map((a) => `${a.label} ${a.value}`).join(", ")}`}
+        >
           <g transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`}>
             {arcs.map((a, i) => (
               <circle

@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel
 from sqlalchemy import Row, and_, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import friendships as friendships_table
@@ -100,7 +101,9 @@ async def friend_ids(session: AsyncSession, player_id: UUID) -> set[UUID]:
     return {r.addressee_id if r.requester_id == player_id else r.requester_id for r in rows}
 
 
-async def send_request(session: AsyncSession, requester: UUID, addressee: UUID) -> str:
+async def send_request(
+    session: AsyncSession, requester: UUID, addressee: UUID, *, _retry: bool = True
+) -> str:
     """Returns "pending", or "accepted" when this completes a mutual request.
 
     Two people who both tapped Add have already agreed; making the second one
@@ -148,16 +151,25 @@ async def send_request(session: AsyncSession, requester: UUID, addressee: UUID) 
         await session.commit()
         return "accepted"
 
-    await session.execute(
-        friendships_table.insert().values(
-            id=uuid4(),
-            requester_id=requester,
-            addressee_id=addressee,
-            status="pending",
-            created_at=now,
+    try:
+        await session.execute(
+            friendships_table.insert().values(
+                id=uuid4(),
+                requester_id=requester,
+                addressee_id=addressee,
+                status="pending",
+                created_at=now,
+            )
         )
-    )
-    await session.commit()
+        await session.commit()
+    except IntegrityError:
+        # They tapped Add on us in the same instant (the unordered-pair index
+        # lets only one row exist). Look again: their request is there now,
+        # and taking the branch above turns it into a mutual accept.
+        await session.rollback()
+        if not _retry:
+            raise
+        return await send_request(session, requester, addressee, _retry=False)
     return "pending"
 
 
@@ -168,12 +180,15 @@ async def accept_request(session: AsyncSession, edge_id: UUID, actor: UUID) -> N
     # Only the person who was asked can accept, and only while it's pending.
     if row is None or row.addressee_id != actor or row.status != "pending":
         raise FriendNotFound(edge_id)
-    await session.execute(
+    result = await session.execute(
         friendships_table.update()
         .where(friendships_table.c.id == edge_id, friendships_table.c.status == "pending")
         .values(status="accepted", responded_at=utcnow())
     )
     await session.commit()
+    # Withdrawn (or already accepted) between the read above and the update.
+    if result.rowcount == 0:  # type: ignore[attr-defined]
+        raise FriendNotFound(edge_id)
 
 
 async def delete_edge(session: AsyncSession, edge_id: UUID, actor: UUID) -> None:
@@ -192,25 +207,26 @@ async def delete_edge(session: AsyncSession, edge_id: UUID, actor: UUID) -> None
 
 
 async def unfriend(session: AsyncSession, actor: UUID, other: UUID) -> None:
-    row = (
-        await session.execute(
-            select(friendships_table).where(
-                or_(
-                    and_(
-                        friendships_table.c.requester_id == actor,
-                        friendships_table.c.addressee_id == other,
-                    ),
-                    and_(
-                        friendships_table.c.requester_id == other,
-                        friendships_table.c.addressee_id == actor,
-                    ),
-                )
+    """Removes every row between the two, in either direction — deleting just
+    the first one found once left a friendship standing (and the ex-friend
+    still able to see your money stats) when a stray reverse row existed."""
+    result = await session.execute(
+        friendships_table.delete().where(
+            or_(
+                and_(
+                    friendships_table.c.requester_id == actor,
+                    friendships_table.c.addressee_id == other,
+                ),
+                and_(
+                    friendships_table.c.requester_id == other,
+                    friendships_table.c.addressee_id == actor,
+                ),
             )
         )
-    ).first()
-    if row is None:
+    )
+    await session.commit()
+    if result.rowcount == 0:  # type: ignore[attr-defined]
         raise FriendNotFound(other)
-    await delete_edge(session, row.id, actor)
 
 
 async def played_with(session: AsyncSession, player_id: UUID) -> list[UserProfile]:

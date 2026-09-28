@@ -33,6 +33,8 @@ from uuid import UUID, uuid4
 
 from .errors import IllegalTransition, NotAuthorized, SeqConflict
 from .models import (
+    MAX_CARDS,
+    REPLAY,
     Event,
     EventType,
     GameRules,
@@ -84,6 +86,14 @@ def _require_in_progress(state: RoomState) -> None:
 def _require_member(state: RoomState, player_id: UUID) -> None:
     if player_id not in state.members:
         raise NotAuthorized("Not a member of this room.")
+
+
+def _lowest_free_seat(members: dict[UUID, Member]) -> int:
+    """Seats can't just be len(members): after someone leaves the lobby, that
+    number can already be taken, and two players sharing a seat makes seat
+    order (and host succession) depend on dict order."""
+    taken = {m.seat for m in members.values()}
+    return next(s for s in range(len(members) + 1) if s not in taken)
 
 
 # ============================================================
@@ -316,6 +326,8 @@ def _submit_cards_events(
         raise IllegalTransition(
             "A losing hand has at least 1 card left — only the winner finishes on 0."
         )
+    if cards > MAX_CARDS:
+        raise IllegalTransition(f"A hand can't have more than {MAX_CARDS} cards.")
 
     ts = _now(now)
     payload = {"round_no": round_.round_no, "target_player": str(target), "cards": cards}
@@ -422,9 +434,14 @@ def add_special_hand(
 
 
 def _target_round_index_for_void(state: RoomState) -> int:
+    """The round a void undoes: the current one once a win has been claimed
+    in it, otherwise the one before. A round still in `playing` has no card
+    settlement to reverse — even if a special hand was claimed in it, which
+    used to make the previous round impossible to undo (the void silently
+    targeted the playing round and changed nothing)."""
     if not state.rounds:
         raise IllegalTransition("There's no round to void.")
-    if state.rounds[-1].is_empty:
+    if state.rounds[-1].phase == RoundPhase.PLAYING:
         if len(state.rounds) < 2:
             raise IllegalTransition("There's no round to void.")
         return len(state.rounds) - 2
@@ -459,15 +476,15 @@ def void_special_hand(
         raise IllegalTransition("You have no special hand to undo in this round.")
 
     mine = [t for t in round_.transfers if t.kind == TransferKind.SPECIAL and t.to_player == actor]
-    # One claim bills every other player once, so the most recent claim is
-    # the last group of that size.
-    per_claim = max(1, len(mine) // round_.special_counts[actor])
-    to_reverse = mine[-per_claim:]
-    payload = {
-        "round_no": round_.round_no,
-        "claimer": str(actor),
-        "transfers": [t.model_dump(mode="json") for t in to_reverse],
-    }
+    claim_seq = max((t.claim_seq for t in mine if t.claim_seq is not None), default=None)
+    payload: dict[str, Any] = {"round_no": round_.round_no, "claimer": str(actor)}
+    if claim_seq is not None:
+        to_reverse = [t for t in mine if t.claim_seq == claim_seq]
+        payload["claim_seq"] = claim_seq
+    else:  # pragma: no cover — every folded special carries a claim_seq
+        per_claim = max(1, len(mine) // round_.special_counts[actor])
+        to_reverse = mine[-per_claim:]
+    payload["transfers"] = [t.model_dump(mode="json") for t in to_reverse]
     return [
         _mk_event(
             state,
@@ -491,6 +508,9 @@ def void_last_round(
 ) -> list[Event]:
     _check_seq(state, expected_seq)
     _require_in_progress(state)
+    # Someone who stepped out keeps their balance but takes no further part —
+    # including reaching back in to undo a round they won.
+    _require_member(state, actor)
     idx = _target_round_index_for_void(state)
     # The player who claimed the win can take it back — they're the one who
     # knows it was a misclick. The host can too, as the backstop for when
@@ -558,6 +578,8 @@ def _apply_in_place(new: RoomState, event: Event) -> None:
     once per replay rather than once per event — a per-event deep copy of a
     state whose round history grows with every event made replay quadratic
     (a 100-round game took seconds to rebuild on every poll)."""
+    if event.room_id != new.room_id:
+        raise ValueError(f"Event {event.event_id} belongs to another room.")
     if event.seq != new.seq + 1:
         raise SeqConflict(expected=new.seq + 1, actual=event.seq)
 
@@ -569,12 +591,12 @@ def _apply_in_place(new: RoomState, event: Event) -> None:
             player_id=pid,
             display_name=event.payload["display_name"],
             is_guest=event.payload.get("is_guest", False),
-            seat=len(new.members),
+            seat=_lowest_free_seat(new.members),
         )
         new.balances[pid] = 0
 
     elif event.type == EventType.GAME_STARTED:
-        new.rules = GameRules.model_validate(event.payload["rules"])
+        new.rules = GameRules.model_validate(event.payload["rules"], context=REPLAY)
         new.status = RoomStatus.IN_PROGRESS
         new.rounds = [RoundState(round_no=1, phase=RoundPhase.PLAYING)]
 
@@ -594,7 +616,7 @@ def _apply_in_place(new: RoomState, event: Event) -> None:
         for t in event.payload["transfers"]:
             new.balances[UUID(t["from_player"])] -= t["amount_cents"]
             new.balances[UUID(t["to_player"])] += t["amount_cents"]
-            round_.transfers.append(Transfer.model_validate(t))
+            round_.transfers.append(Transfer.model_validate({**t, "claim_seq": event.seq}))
 
     elif event.type == EventType.SPECIAL_HAND_VOIDED:
         round_ = new.rounds[-1]
@@ -603,6 +625,13 @@ def _apply_in_place(new: RoomState, event: Event) -> None:
         for t in event.payload["transfers"]:
             new.balances[UUID(t["from_player"])] += t["amount_cents"]
             new.balances[UUID(t["to_player"])] -= t["amount_cents"]
+        if "claim_seq" in event.payload:
+            round_.transfers = [
+                t for t in round_.transfers if t.claim_seq != event.payload["claim_seq"]
+            ]
+            return
+        # Older events carry no claim_seq: drop the reversed claim's
+        # transfers from the tail, as they were when recorded.
         reversed_count = len(event.payload["transfers"])
         kept = []
         removed = 0
@@ -646,10 +675,18 @@ def _apply_in_place(new: RoomState, event: Event) -> None:
                 continue
             new.balances[t.from_player] += t.amount_cents
             new.balances[t.to_player] -= t.amount_cents
+        special_counts = dict(round_.special_counts)
+        # Voiding an earlier round discards the later (still-playing) one,
+        # but any special hand claimed there has already moved money — carry
+        # it over so the round list keeps matching the balances.
+        for later in new.rounds[idx + 1 :]:
+            kept_transfers.extend(t for t in later.transfers if t.kind == TransferKind.SPECIAL)
+            for pid, n in later.special_counts.items():
+                special_counts[pid] = special_counts.get(pid, 0) + n
         reverted = RoundState(
             round_no=round_.round_no,
             phase=RoundPhase.PLAYING,
-            special_counts=dict(round_.special_counts),
+            special_counts=special_counts,
             transfers=kept_transfers,
         )
         new.rounds = new.rounds[:idx] + [reverted]

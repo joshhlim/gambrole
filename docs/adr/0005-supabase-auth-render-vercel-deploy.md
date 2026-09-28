@@ -1,6 +1,7 @@
 # ADR-0005: Real accounts via Supabase Auth; Render + Vercel for hosting
 
-- Status: accepted
+- Status: accepted; decision 1, the magic-link part of decision 4, and the
+  `dev` default in decision 3 superseded by ADR-0008
 - Date: 2026-09-01
 
 ## Context
@@ -15,7 +16,8 @@ place to run that isn't a laptop.
 
 ## Decision
 
-1. **Magic-link email auth only, not Google OAuth yet.** Supabase supports
+1. *(Superseded by ADR-0008: email + password replaced magic links.)*
+   **Magic-link email auth only, not Google OAuth yet.** Supabase supports
    email links with zero extra setup; Google sign-in would need a separate
    Google Cloud Console project and OAuth consent screen — a second external
    account-creation flow this phase doesn't need to force. `auth.ts`'s mode

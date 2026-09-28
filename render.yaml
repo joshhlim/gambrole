@@ -11,10 +11,34 @@ services:
     runtime: python
     plan: free
     rootDir: api
-    buildCommand: "pip install -e ../core -e . && alembic upgrade head"
+    # With a rootDir, Render only autodeploys on changes under api/ — but the
+    # API installs core/ too, so a core-only change must redeploy it. Paths
+    # here are relative to the repo root, not rootDir.
+    buildFilter:
+      paths:
+        - api/**
+        - core/**
+    # Deploy only once CI on main is green, instead of on every push.
+    # A red main therefore blocks deploys; fix CI or deploy by hand.
+    autoDeployTrigger: checksPass
+    # Exact third-party pins from requirements.lock (regenerate with
+    # scripts/lock_api_deps.sh), then the two local packages without letting
+    # pip re-resolve anything.
+    #
+    # Migrations run here because preDeployCommand needs a paid plan. That
+    # means the NEW schema is live while the OLD code is still serving — and
+    # stays live if the deploy then fails. So every migration must be
+    # expand/contract only: add nullable/defaulted columns, tables and
+    # indexes; never drop/rename/tighten anything the running code still
+    # uses in the same deploy. Remove old columns in a later deploy.
+    buildCommand: "pip install -r requirements.lock && pip install --no-deps -e ../core -e . && alembic upgrade head"
     startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    # Shallow on purpose: a database blip shouldn't make Render restart the
+    # service. /readyz is the deep check (runs SELECT 1).
     healthCheckPath: /healthz
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.14" # Render needs the full patch version; keep in step with CI's PYTHON_VERSION
       - key: TAIDI_AUTH_MODE
         value: supabase
       - key: TAIDI_DATABASE_URL
@@ -24,4 +48,4 @@ services:
       - key: TAIDI_SUPABASE_JWT_SECRET
         sync: false # Supabase project settings → API → "JWT Secret" / "Legacy JWT Secret" — set this instead if your project has one (older projects). Leave both blank only if neither applies.
       - key: TAIDI_CORS_ORIGINS
-        sync: false # JSON array, e.g. ["https://your-app.vercel.app"] — set after the web app is deployed
+        sync: false # JSON array, e.g. ["https://your-app.vercel.app"] — required; without it only localhost origins are allowed

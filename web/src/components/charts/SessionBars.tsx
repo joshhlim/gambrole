@@ -11,9 +11,9 @@ export default function SessionBars({
   onSelect,
 }: {
   sessions: SessionFact[];
-  onSelect?: (roomId: string) => void;
+  onSelect?: (session: SessionFact) => void;
 }) {
-  const { hovered, bind, clear } = useHovered();
+  const { hovered, bind, clear, activate } = useHovered();
   if (sessions.length === 0) {
     return (
       <ChartFrame title="Session results" testId="chart-sessions">
@@ -35,7 +35,7 @@ export default function SessionBars({
   return (
     <ChartFrame
       title="Session results"
-      hint="tap a bar"
+      hint={onSelect ? "tap a bar" : undefined}
       testId="chart-sessions"
       tooltip={
         active
@@ -67,7 +67,7 @@ export default function SessionBars({
     >
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="h-auto w-full touch-none"
+        className="h-auto w-full touch-pan-y"
         role="img"
         aria-label={`Net result for each of ${sessions.length} sessions`}
         onPointerLeave={clear}
@@ -79,8 +79,18 @@ export default function SessionBars({
           const x = i * slot + (slot - barW) / 2;
           return (
             <g key={s.room_id} {...bind(i)}>
-              {/* Full-height transparent target so thin bars stay tappable. */}
-              <rect x={i * slot} y={0} width={slot} height={H} fill="transparent" />
+              {/* Full-height transparent target so thin bars stay tappable —
+                  and it takes the click, so a tap beside a short bar still
+                  counts as that bar. */}
+              <rect
+                x={i * slot}
+                y={0}
+                width={slot}
+                height={H}
+                fill="transparent"
+                style={{ cursor: onSelect ? "pointer" : "default" }}
+                onClick={() => onSelect && activate(i, () => onSelect(s))}
+              />
               <rect
                 x={x}
                 y={up ? midY - h : midY}
@@ -89,8 +99,7 @@ export default function SessionBars({
                 rx={1}
                 fill={up ? POS : NEG}
                 opacity={hovered === null || hovered === i ? 1 : 0.45}
-                style={{ cursor: onSelect ? "pointer" : "default" }}
-                onClick={() => onSelect?.(s.room_id)}
+                pointerEvents="none"
               />
             </g>
           );

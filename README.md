@@ -1,7 +1,14 @@
 # GamBROle
 
-Score keeping & settlements for Big Two (Taidi) nights. Configurable house
-rules, autosaving games, lifetime analytics.
+Score keeping & settlements for Big Two (Taidi) and Mahjong nights.
+Configurable house rules, multiplayer rooms where everyone plays from their
+own phone, lifetime analytics. Live at
+[gambrole.vercel.app](https://gambrole.vercel.app).
+
+Two apps live in this repo: the **room app** (`core/` + `api/` + `web/`,
+deployed on Vercel + Render + Supabase) and the older **legacy Streamlit
+app** (`taidi.py`, deployed separately on Streamlit Community Cloud). The
+first sections below are the legacy app's.
 
 ## Run locally
 
@@ -21,25 +28,40 @@ Data is stored in a local `taidi.db` SQLite file.
 
 ```bash
 source .venv/bin/activate   # if not already active
-pip install -r requirements-dev.txt   # installs taidi_core and taidi_api editable too
+pip install -r requirements-dev.txt   # gambrole-core + gambrole-api editable, pinned tools
 pytest tests -q       # legacy app: engine, persistence, end-to-end AppTest suites
-pytest core/tests -q  # taidi_core: scoring engine + room state machine
+pytest core/tests -q  # taidi_core + mahjong_core: scoring engines + room state machines
 ruff check . && ruff format --check .
 mypy --config-file core/pyproject.toml core/taidi_core
 ```
 
 CI runs the same checks on every push and pull request (in a fresh runner,
-which is its own isolation — no venv needed there).
+which is its own isolation — no venv needed there), plus the API suite, a
+migration round-trip with `alembic check` (models vs. migrations drift),
+and the Playwright e2e suite. Render only deploys a commit once CI on it is
+green.
+
+**Pinned dependencies.** `api/requirements.lock` pins every third-party
+package the API and core need; Render's build and `requirements-dev.txt`
+both install from it, so CI tests exactly what gets deployed. After changing
+dependencies in `api/pyproject.toml` or `core/pyproject.toml` (or merging a
+Dependabot bump there), regenerate it with
+`scripts/lock_api_deps.sh` (keeps existing pins; add `--upgrade` or
+`--upgrade-package <name>` to bump) and commit the result. The dev tools
+(ruff, mypy, pytest) are pinned directly in `requirements-dev.txt`.
 
 ### Optional passcode
 
 Set `APP_PASSCODE = "..."` in secrets to require a shared passcode before the
-app opens. Leave it unset for no gate.
+app opens. Repeated wrong guesses lock the form out with a growing delay.
+Leave it unset for no gate — but then restoring a backup, deleting finished
+games, and the Danger zone are hidden, since anyone with the URL could use
+them.
 
 ### Backups
 
 Settings → Games → Backup downloads a JSON export of everything; the same
-panel restores one (replacing all current data).
+panel restores one (replacing all current data; needs `APP_PASSCODE`).
 
 ## Deploy (Streamlit Community Cloud + Turso)
 
@@ -59,9 +81,12 @@ redeploys and restarts); without them it falls back to the local file.
 
 ## Deploy the room app (Supabase + Render + Vercel)
 
-The `core/`/`api/`/`web/` stack (see ADR-0005) isn't live anywhere yet. All
-three are free tiers; the API sleeps on idle the same way the Streamlit app
-does. Do these in order — later steps need values from earlier ones.
+The `core/`/`api/`/`web/` stack (see ADR-0005) is live at
+[gambrole.vercel.app](https://gambrole.vercel.app), with the API at
+`https://gambrole-api-sg.onrender.com`. These are the steps it was set up
+with, for rebuilding it from scratch. All three are free tiers; the API
+sleeps on idle the same way the Streamlit app does. Do these in order —
+later steps need values from earlier ones.
 
 **1. Supabase** — [supabase.com](https://supabase.com) → New Project. When
 prompted, disable "Enable Data API" (this app never queries Supabase's
@@ -78,7 +103,10 @@ talks to the API); leave automatic RLS on. Once it's created:
 - **Project Settings → Database → Connection string** → copy the **URI**.
   Prefix it with `postgresql+asyncpg://` in place of `postgresql://`
   (SQLAlchemy needs the driver named explicitly).
-- Email auth is on by default — nothing to configure for magic links.
+- Email auth is on by default. Sign-in is email + password (ADR-0008);
+  under **Authentication → Sign In / Providers → Email**, turn off
+  **Confirm email** so sign-up doesn't wait on an email — Supabase's
+  built-in sender only allows a few messages an hour.
 
 **2. API on Render** — [render.com](https://render.com) → New → Blueprint →
 connect this repo. Render finds `render.yaml` automatically. After the first
@@ -89,16 +117,36 @@ Environment):
   `TAIDI_SUPABASE_URL` — the Project URL from step 1.
 - **If your project showed a JWT Secret / Legacy JWT Secret**:
   `TAIDI_SUPABASE_JWT_SECRET` — that value instead.
-- `TAIDI_CORS_ORIGINS` — leave as `["http://localhost:3000"]` for now;
-  step 4 updates it once the Vercel URL exists.
+- `TAIDI_CORS_ORIGINS` — leave blank for now (the API then only allows
+  localhost origins); step 4 sets it once the Vercel URL exists.
+
+`TAIDI_AUTH_MODE=supabase` is already set by the Blueprint; the API refuses
+to start without an explicit auth mode.
 
 Copy the Render URL it gives you (`https://gambrole-api-sg.onrender.com` or
-similar) — step 3 needs it. The Blueprint pins the service to Render's
+similar) — step 3 needs it. `/healthz` is Render's (shallow) health check;
+`/readyz` also runs `SELECT 1` against the database and returns 503 if it
+can't reach it. The Blueprint pins the service to Render's
 `singapore` region, next to the Supabase project (`ap-southeast-1`); every
 request makes several database round trips, so keep the two in the same
 region. Its first deploy fails until the `sync: false` variables above are
 filled in — the build runs `alembic upgrade head`, which needs
 `TAIDI_DATABASE_URL`. Fill them in and redeploy.
+
+The Blueprint also pins `PYTHON_VERSION` (the same patch release CI uses),
+redeploys on changes under `api/` or `core/` (`buildFilter`), and waits for
+CI to pass before deploying (`autoDeployTrigger: checksPass`). Migrations
+run in the build command, so the new schema goes live before the new code
+and stays live if the deploy fails: keep every migration additive
+(expand/contract — drop or rename things only in a later deploy).
+
+**Keeping it awake.** A free Render service sleeps after 15 idle minutes
+and takes ~30s to wake, and a free Supabase project pauses after a week
+idle. `.github/workflows/keep-warm.yml` pings `/readyz` on a schedule, but
+GitHub delivers scheduled runs too unreliably for that to work on its own —
+set up a free [cron-job.org](https://cron-job.org) or UptimeRobot monitor
+hitting `https://gambrole-api-sg.onrender.com/readyz` every 5-10 minutes
+during game-night hours (15:00-03:00 SGT).
 
 **3. Web on Vercel** — [vercel.com](https://vercel.com) → New Project →
 import this repo → set **Root Directory** to `web`. Add these environment
@@ -118,12 +166,42 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon public key from step 1>
 
 **4. Loop back** — in Supabase, Authentication → URL Configuration, add the
 Vercel URL to **Redirect URLs** (`https://your-app.vercel.app/auth/callback`)
-so magic links can complete sign-in. In Render, update `TAIDI_CORS_ORIGINS`
+so password-reset and email-change links land back in the app. In Render, update `TAIDI_CORS_ORIGINS`
 to `["https://your-app.vercel.app"]` and redeploy.
 
-Open the Vercel URL, sign in with a real email, and you're on the real
-stack. `web/README.md` and `api/README.md` have the day-to-day dev commands;
+Open the Vercel URL, sign up with an email and password, and you're on the
+real stack. `web/README.md` and `api/README.md` have the day-to-day dev commands;
 ADR-0005 has the reasoning behind these choices.
+
+## Backups (room app)
+
+`.github/workflows/backup.yml` runs weekly (and on demand from the Actions
+tab) and `pg_dump`s the app's tables (the `public` schema — Supabase keeps
+the accounts themselves) into an **encrypted** artifact kept for 30 days.
+The repo is public and so are its Actions artifacts, which is why the dump
+is encrypted before upload. It does nothing until two repository secrets
+exist (Settings → Secrets and variables → Actions):
+
+- `BACKUP_DATABASE_URL` — the Supabase **Session pooler** connection string
+  as a plain `postgresql://...` URL (not `+asyncpg`; the direct connection
+  is IPv6-only and GitHub's runners can't reach it).
+- `BACKUP_PASSPHRASE` — a long random passphrase. Keep a copy somewhere
+  other than GitHub.
+
+To restore, download the artifact from the run's page, then:
+
+```bash
+unzip gambrole-db-<stamp>.zip
+gpg --decrypt --batch --passphrase "$BACKUP_PASSPHRASE" \
+    --output gambrole.dump gambrole-<stamp>.dump.gpg
+pg_restore --list gambrole.dump               # inspect first
+pg_restore --clean --if-exists --no-owner --no-privileges \
+    --dbname "postgresql://..." gambrole.dump   # replaces the app's tables
+```
+
+Try it against the local database (`docker compose up -d postgres`,
+`postgresql://gambrole:gambrole_dev@localhost:5433/gambrole`) before
+pointing it at production. `pg_restore` must be version 17 or newer.
 
 ## Roadmap
 
@@ -134,18 +212,26 @@ path, the frontend, and account/deployment choices), `CHANGELOG.md` for
 progress, and **`PROGRESS.md`** for a living session-handoff snapshot — read
 that first when picking this project back up.
 
-`core/taidi_core` is the new domain package implementing that design,
-`api/` is a FastAPI backend built on it, and `web/` is the Next.js PWA
-frontend — none of it is wired into the deployed app yet (see `db.py`/
-`ui.py` below for what actually runs in production today). The full slice
-runs locally: `docker compose up -d postgres`, then see
-[api/README.md](api/README.md) and [web/README.md](web/README.md).
-`web/e2e/full-game.spec.ts` drives three browser contexts through a full
-game as the end-to-end proof.
+`core/` (`taidi_core`, `mahjong_core`) holds the domain packages
+implementing that design, `api/` is a FastAPI backend built on them, and
+`web/` is the Next.js PWA frontend — together they're the room app live at
+gambrole.vercel.app. The legacy Streamlit app (`db.py`/`ui.py` below) is
+still deployed separately. The full slice runs locally:
+`docker compose up -d postgres`, then see [api/README.md](api/README.md)
+and [web/README.md](web/README.md). The Playwright suites in `web/e2e/`
+(`full-game.spec.ts` drives three browser contexts through a full game)
+are the end-to-end proof:
+
+```bash
+docker compose up -d postgres
+source .venv/bin/activate
+(cd api && python -m alembic upgrade head)
+cd web && TAIDI_AUTH_MODE=dev npx playwright test   # starts the API and web app itself
+```
 
 ## Structure
 
-### Deployed app (Streamlit)
+### Legacy app (Streamlit)
 
 | File      | Purpose                                              |
 | --------- | ---------------------------------------------------- |
@@ -175,11 +261,12 @@ ADR-0003. `docker-compose.yml` at the repo root runs a local Postgres for it.
 
 | Module | Purpose |
 | --- | --- |
-| `app/db.py` | Schema (`rooms`, `events`) and session management |
+| `app/db.py` | Schema (`rooms`, `events`, read-model tables) and session management |
 | `app/auth.py` | Pluggable JWT auth: dev-mode token minting or Supabase verification |
 | `app/events_store.py` | Persistence + folding the event log back into a `RoomState` |
 | `app/routers/rooms.py` | The room command endpoints |
-| `alembic/` | Migrations |
+| `alembic/` | Migrations (additive only — see Deploy) |
+| `requirements.lock` | Exact dependency pins Render and CI install |
 
 ### `web/` — Next.js PWA frontend
 

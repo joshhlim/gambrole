@@ -14,6 +14,15 @@ from .models import (
 )
 
 
+def _name(room: RoomState, pid: UUID) -> str:
+    """Someone who stepped out is no longer a member but still has a name —
+    without `departed` they'd show up as a raw id."""
+    member = room.members.get(pid)
+    if member:
+        return member.display_name
+    return room.departed.get(pid, str(pid))
+
+
 def player_lifetime_stats(rooms: list[RoomState]) -> dict[UUID, PlayerStats]:
     """Lifetime stats per player across every ENDED room. Non-ended rooms are ignored."""
     stats: dict[UUID, PlayerStats] = {}
@@ -21,8 +30,7 @@ def player_lifetime_stats(rooms: list[RoomState]) -> dict[UUID, PlayerStats]:
         if room.status != RoomStatus.ENDED:
             continue
         for pid, balance in room.balances.items():
-            member = room.members.get(pid)
-            name = member.display_name if member else str(pid)
+            name = _name(room, pid)
             s = stats.get(pid)
             if s is None:
                 s = PlayerStats(player_id=pid, display_name=name)
@@ -66,8 +74,7 @@ def taidi_round_stats(rooms: list[RoomState]) -> dict[UUID, TaidiPlayerStats]:
             for pid, count in round_.special_counts.items():
                 if not count:
                     continue
-                member = room.members.get(pid)
-                s = _get(pid, member.display_name if member else str(pid))
+                s = _get(pid, _name(room, pid))
                 s.special_hands_claimed += count
 
             if round_.phase != RoundPhase.RESOLVED or round_.rules_snapshot is None:
@@ -87,8 +94,7 @@ def taidi_round_stats(rooms: list[RoomState]) -> dict[UUID, TaidiPlayerStats]:
             if round_.winner is not None:
                 participants.add(round_.winner)
             for pid in participants:
-                member = room.members.get(pid)
-                s = _get(pid, member.display_name if member else str(pid))
+                s = _get(pid, _name(room, pid))
                 s.rounds_played += 1
 
                 if round_.winner == pid:

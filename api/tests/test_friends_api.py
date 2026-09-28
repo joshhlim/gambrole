@@ -53,9 +53,10 @@ async def test_username_is_derived_from_the_email_when_there_is_one(make_device)
 
     from app.users_service import suggest_username
 
-    assert suggest_username("jo.shlim@gmail.com", "Josh") == "joshlim"
-    assert suggest_username(None, "Qu Zhetao") == "quzhetao"
-    assert suggest_username("", "??") == "player"  # nothing usable
+    # Built from the display name, never the (private) address.
+    assert suggest_username("Josh") == "josh"
+    assert suggest_username("Qu Zhetao") == "quzhetao"
+    assert suggest_username("??") == "player"  # nothing usable
     del bob
 
 

@@ -4,16 +4,9 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
+import { money } from "@/lib/format";
 import { historyApi } from "@/lib/historyApi";
 import type { HistoryEntry, HistoryResponse } from "@/lib/historyTypes";
-
-function dollars(cents: number): string {
-  const sign = cents < 0 ? "-" : "";
-  return `${sign}$${(Math.abs(cents) / 100).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -48,7 +41,7 @@ function GameCard({ game }: { game: HistoryEntry }) {
         <p
           className={`text-lg font-bold tabular ${game.net_cents < 0 ? "text-danger" : "text-brand-strong"}`}
         >
-          {dollars(game.net_cents)}
+          {money(game.net_cents)}
         </p>
       </div>
       {game.settlements_total > 0 && (

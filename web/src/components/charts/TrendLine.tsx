@@ -21,9 +21,9 @@ export default function TrendLine({
   onSelect,
 }: {
   points: { session: SessionFact; total: number }[];
-  onSelect?: (roomId: string) => void;
+  onSelect?: (session: SessionFact) => void;
 }) {
-  const { hovered, bind, clear } = useHovered();
+  const { hovered, bind, clear, activate } = useHovered();
   if (points.length === 0) {
     return (
       <ChartFrame title="Cumulative result" testId="chart-trend">
@@ -82,7 +82,7 @@ export default function TrendLine({
     >
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="h-auto w-full touch-none"
+        className="h-auto w-full touch-pan-y"
         role="img"
         aria-label={`Cumulative result over ${points.length} sessions, ending at ${money(final)}`}
         onPointerLeave={clear}
@@ -136,7 +136,7 @@ export default function TrendLine({
             height={H}
             fill="transparent"
             style={{ cursor: onSelect ? "pointer" : "default" }}
-            onClick={() => onSelect?.(p.session.room_id)}
+            onClick={() => onSelect && activate(i, () => onSelect(p.session))}
             {...bind(i)}
           />
         ))}

@@ -54,6 +54,8 @@ export interface MahjongRoomState {
   host_id: string;
   members: Record<string, Member>;
   rules: MahjongRules | null;
+  /** See TaidiRoomState.draft_rules. */
+  draft_rules: MahjongRules | null;
   hands: HandState[];
   balances: Record<string, number>;
   created_at: string;

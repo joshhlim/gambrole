@@ -27,3 +27,7 @@ web/blob-report/
 
 # macOS
 .DS_Store
+
+# Database backups (encrypted or not, never commit them)
+*.dump
+*.dump.gpg

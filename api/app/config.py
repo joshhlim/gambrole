@@ -14,7 +14,11 @@ class Settings(BaseSettings):
 
     # "dev": local HS256 tokens minted by POST /auth/dev-login, no external IdP needed.
     # "supabase": verify tokens issued by Supabase Auth instead.
-    auth_mode: Literal["dev", "supabase"] = "dev"
+    # Deliberately no default: dev mode trusts any token signed with a
+    # secret that's committed to this repo, so a deploy that forgot to set
+    # it must refuse to start (main.py) rather than silently let anyone
+    # sign in as anyone. Scripts and migrations don't need it.
+    auth_mode: Literal["dev", "supabase"] | None = None
     dev_jwt_secret: str = "dev-only-insecure-secret-change-me"
     access_token_ttl_minutes: int = 60 * 24 * 7  # a week — fine for a party-game app
 
@@ -39,6 +43,10 @@ class Settings(BaseSettings):
     # it. These drive a lazy staleness check (see events_store.rebuild_state_
     # with_invite): a room untouched longer than the relevant threshold is
     # closed the next time anyone reads it.
+    # Off in the test suite, which hammers the same endpoints from one
+    # "client" far faster than any person could.
+    rate_limit_enabled: bool = True
+
     lobby_stale_hours: int = 12
     in_progress_stale_hours: int = 24
 

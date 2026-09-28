@@ -1,10 +1,49 @@
 version: 2
+
+# Minor/patch bumps arrive as one grouped PR per ecosystem per week; majors
+# still get their own PR so a breaking change is reviewed on its own.
 updates:
+  # Legacy Streamlit app (requirements.txt) and dev tool pins
+  # (requirements-dev.txt).
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
+    groups:
+      root-minor-patch:
+        update-types: [minor, patch]
+
+  # API runtime deps. Dependabot edits pyproject.toml ranges here; the exact
+  # pins Render installs live in api/requirements.lock — regenerate it with
+  # scripts/lock_api_deps.sh (--upgrade-package <name>) when merging.
+  - package-ecosystem: pip
+    directory: /api
+    schedule:
+      interval: weekly
+    groups:
+      api-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: pip
+    directory: /core
+    schedule:
+      interval: weekly
+    groups:
+      core-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    groups:
+      web-minor-patch:
+        update-types: [minor, patch]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
