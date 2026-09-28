@@ -6,7 +6,8 @@
 # value comes from (Supabase project settings).
 services:
   - type: web
-    name: gambrole-api
+    name: gambrole-api-sg
+    region: singapore
     runtime: python
     plan: free
     rootDir: api
