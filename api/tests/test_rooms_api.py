@@ -219,6 +219,58 @@ async def test_concurrent_card_submissions_do_not_corrupt_state(make_device):
     assert final["rounds"][0]["phase"] == "resolved"
 
 
+async def _four_player_round_collecting(make_device):
+    alice = await make_device("Alice")
+    others = [await make_device(n) for n in ("Bob", "Charlie", "Dana")]
+    room_id, invite_code = await _create_room(alice)
+    for d in others:
+        await d.get(f"/rooms/by-code/{invite_code}")
+        await d.post(f"/rooms/{room_id}/join")
+    state = (await alice.get(f"/rooms/{room_id}/state")).json()
+    state = (
+        await alice.post(
+            f"/rooms/{room_id}/start", json={"expected_seq": state["seq"], "rules": {}}
+        )
+    ).json()
+    state = (await alice.post(f"/rooms/{room_id}/win", json={"expected_seq": state["seq"]})).json()
+    return alice, others, room_id, state
+
+
+async def test_card_submissions_naming_the_round_all_land_when_simultaneous(make_device):
+    """Regression: every loser submitting against the same seq used to race,
+    and whoever lost twice had their submit bounce. Naming the round instead
+    lets them all land, and the round resolves exactly once."""
+    import asyncio
+
+    alice, others, room_id, state = await _four_player_round_collecting(make_device)
+    results = await asyncio.gather(
+        *(
+            d.post(
+                f"/rooms/{room_id}/cards",
+                json={"expected_seq": state["seq"], "round_no": 1, "cards": 3 + i},
+            )
+            for i, d in enumerate(others)
+        )
+    )
+    assert [r.status_code for r in results] == [200, 200, 200], [r.text for r in results]
+
+    final = (await alice.get(f"/rooms/{room_id}/state")).json()
+    assert final["rounds"][0]["phase"] == "resolved"
+    assert final["rounds"][0]["cards_submitted"] == {d.user_id: 3 + i for i, d in enumerate(others)}
+    assert len(final["rounds"]) == 2
+    assert sum(final["balances"].values()) == 0
+
+
+async def test_card_submission_for_a_past_round_is_refused(make_device):
+    _alice, others, room_id, state = await _four_player_round_collecting(make_device)
+    r = await others[0].post(
+        f"/rooms/{room_id}/cards",
+        json={"expected_seq": state["seq"], "round_no": 2, "cards": 3},
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"]["state"]["seq"] == state["seq"]
+
+
 async def test_invite_code_present_on_every_response_not_just_create(make_device):
     """Regression: invite_code must be visible to any member at any time, not
     just in the create-room response — the frontend lobby reads it from

@@ -32,12 +32,16 @@ class SeqOnlyRequest(BaseModel):
 class SubmitCardsRequest(BaseModel):
     expected_seq: int
     cards: int
+    # The round this count answers. When given, the count is checked against
+    # the round rather than the room's seq — see rooms._card_seq.
+    round_no: int | None = None
 
 
 class SubmitForRequest(BaseModel):
     expected_seq: int
     target_player: UUID
     cards: int
+    round_no: int | None = None
 
 
 class AssignSeatsRequest(BaseModel):

@@ -16,13 +16,14 @@ from typing import Literal
 from uuid import UUID
 
 from mahjong_core.models import MahjongSessionFacts
+from mahjong_core.models import RoomState as MahjongRoomState
 from mahjong_core.stats import mahjong_session_facts
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from taidi_core.models import Member, TaidiSessionFacts
 from taidi_core.stats import taidi_session_facts
 
-from .events_store import rebuild_mahjong_state_with_invite, rebuild_taidi_state_with_invite
+from .events_store import rebuild_many
 from .money import MAHJONG_CHIP_VALUE_CENTS
 from .stats_service import ended_room_refs
 from .users_service import UserProfile, profiles_for
@@ -67,14 +68,16 @@ async def build_facts_for(session: AsyncSession, player_id: UUID) -> StatsFactsR
             if pid != player_id
         ]
 
-    for room_id, game_type in room_refs:
+    states = await rebuild_many(session, [room_id for room_id, _game_type in room_refs])
+    for room_id, _game_type in room_refs:
         # A balance is the test of having played — see history_service for
         # why membership isn't (someone who stepped out mid-game keeps the
         # former but not the latter).
-        if game_type == "mahjong":
-            mj_state, _invite = await rebuild_mahjong_state_with_invite(session, room_id)
-            if player_id not in mj_state.balances:
-                continue
+        state = states[room_id]
+        if player_id not in state.balances:
+            continue
+        if isinstance(state, MahjongRoomState):
+            mj_state = state
             assert mj_state.ended_at is not None  # ended_room_refs filters on status
             facts.append(
                 SessionFact(
@@ -87,9 +90,7 @@ async def build_facts_for(session: AsyncSession, player_id: UUID) -> StatsFactsR
                 )
             )
         else:
-            td_state, _invite = await rebuild_taidi_state_with_invite(session, room_id)
-            if player_id not in td_state.balances:
-                continue
+            td_state = state
             assert td_state.ended_at is not None
             facts.append(
                 SessionFact(

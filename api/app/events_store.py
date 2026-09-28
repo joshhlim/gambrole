@@ -194,40 +194,91 @@ async def _load_room_seed(session: AsyncSession, room_id: UUID) -> Any:
     return row
 
 
+def _taidi_event(r: Any) -> TaidiEvent:
+    return TaidiEvent(
+        event_id=r.id,
+        room_id=r.room_id,
+        seq=r.seq,
+        type=TaidiEventType(r.type),
+        actor=r.actor,
+        payload=r.payload,
+        created_at=r.created_at,
+    )
+
+
+def _mahjong_event(r: Any) -> MahjongEvent:
+    return MahjongEvent(
+        event_id=r.id,
+        room_id=r.room_id,
+        seq=r.seq,
+        type=MahjongEventType(r.type),
+        actor=r.actor,
+        payload=r.payload,
+        created_at=r.created_at,
+    )
+
+
 async def _load_taidi_events(session: AsyncSession, room_id: UUID) -> list[TaidiEvent]:
     rows = await session.execute(
         select(events_table).where(events_table.c.room_id == room_id).order_by(events_table.c.seq)
     )
-    return [
-        TaidiEvent(
-            event_id=r.id,
-            room_id=r.room_id,
-            seq=r.seq,
-            type=TaidiEventType(r.type),
-            actor=r.actor,
-            payload=r.payload,
-            created_at=r.created_at,
-        )
-        for r in rows
-    ]
+    return [_taidi_event(r) for r in rows]
 
 
 async def _load_mahjong_events(session: AsyncSession, room_id: UUID) -> list[MahjongEvent]:
     rows = await session.execute(
         select(events_table).where(events_table.c.room_id == room_id).order_by(events_table.c.seq)
     )
-    return [
-        MahjongEvent(
-            event_id=r.id,
-            room_id=r.room_id,
-            seq=r.seq,
-            type=MahjongEventType(r.type),
-            actor=r.actor,
-            payload=r.payload,
-            created_at=r.created_at,
-        )
-        for r in rows
-    ]
+    return [_mahjong_event(r) for r in rows]
+
+
+async def rebuild_many(session: AsyncSession, room_ids: list[UUID]) -> dict[UUID, AnyRoomState]:
+    """Fold several rooms at once, for the read paths that walk a player's
+    whole history (stats, history). Two queries in all — every seed, then
+    every event — rather than two per room: the database is a long way from
+    the API, so a player with 30 past games was paying 60 serial round
+    trips before any folding started.
+
+    Pure like rebuild_state_with_invite: never runs the staleness backstop.
+    Rooms that don't exist are simply absent from the result.
+    """
+    if not room_ids:
+        return {}
+    seeds = (
+        await session.execute(select(rooms_table).where(rooms_table.c.room_id.in_(room_ids)))
+    ).all()
+    rows_by_room: dict[UUID, list[Any]] = {}
+    for r in await session.execute(
+        select(events_table)
+        .where(events_table.c.room_id.in_(room_ids))
+        .order_by(events_table.c.room_id, events_table.c.seq)
+    ):
+        rows_by_room.setdefault(r.room_id, []).append(r)
+
+    states: dict[UUID, AnyRoomState] = {}
+    for seed in seeds:
+        rows = rows_by_room.get(seed.room_id, [])
+        if seed.game_type == "mahjong":
+            states[seed.room_id] = mahjong_machine.fold(
+                MahjongRoomState.new(
+                    room_id=seed.room_id,
+                    host_id=seed.host_id,
+                    host_display_name=seed.host_display_name,
+                    now=seed.created_at,
+                ),
+                [_mahjong_event(r) for r in rows],
+            )
+        else:
+            states[seed.room_id] = taidi_machine.fold(
+                TaidiRoomState.new(
+                    room_id=seed.room_id,
+                    host_id=seed.host_id,
+                    host_display_name=seed.host_display_name,
+                    now=seed.created_at,
+                ),
+                [_taidi_event(r) for r in rows],
+            )
+    return states
 
 
 async def _rebuild(
@@ -408,21 +459,29 @@ async def append_events(
     """
     if not new_events:
         return
-    await session.execute(
-        insert(events_table),
-        [
-            {
-                "id": e.event_id,
-                "room_id": room_id,
-                "seq": e.seq,
-                "type": e.type.value,
-                "actor": e.actor,
-                "payload": e.payload,
-                "created_at": e.created_at,
-            }
-            for e in new_events
-        ],
-    )
+    # The seq collision surfaces here, at the INSERT, not at commit — and
+    # Postgres refuses every further statement in the transaction until it's
+    # rolled back, so a caller's retry would otherwise fail on its very
+    # first read.
+    try:
+        await session.execute(
+            insert(events_table),
+            [
+                {
+                    "id": e.event_id,
+                    "room_id": room_id,
+                    "seq": e.seq,
+                    "type": e.type.value,
+                    "actor": e.actor,
+                    "payload": e.payload,
+                    "created_at": e.created_at,
+                }
+                for e in new_events
+            ],
+        )
+    except IntegrityError:
+        await session.rollback()
+        raise
 
     joins = [
         {

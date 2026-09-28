@@ -16,11 +16,10 @@ from mahjong_core.models import RoomState as MahjongRoomState
 from pydantic import BaseModel
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from taidi_core.models import RoomState as TaidiRoomState
 
 from .db import events as events_table
 from .db import settlements as settlements_table
-from .events_store import rebuild_mahjong_state_with_invite, rebuild_taidi_state_with_invite
+from .events_store import rebuild_many
 from .money import MAHJONG_CHIP_VALUE_CENTS
 from .stats_service import ended_room_refs
 
@@ -81,14 +80,14 @@ async def build_history_for(session: AsyncSession, player_id: UUID) -> HistoryRe
     ).all()
     end_by_room = {row.room_id: row for row in end_rows}
 
+    states = await rebuild_many(session, room_ids)
+
     entries: list[HistoryEntry] = []
     for room_id, game_type in room_refs:
-        state: TaidiRoomState | MahjongRoomState
-        if game_type == "mahjong":
-            state, _invite_code = await rebuild_mahjong_state_with_invite(session, room_id)
+        state = states[room_id]
+        if isinstance(state, MahjongRoomState):
             net_cents = state.balances.get(player_id, 0) * MAHJONG_CHIP_VALUE_CENTS
         else:
-            state, _invite_code = await rebuild_taidi_state_with_invite(session, room_id)
             net_cents = state.balances.get(player_id, 0)
 
         # room_participants remembers everyone who EVER joined (ADR-0007),

@@ -548,10 +548,19 @@ def end_game(
 
 def apply(state: RoomState, event: Event) -> RoomState:
     """Fold one event into state. Pure: returns a new RoomState, never mutates the input."""
-    if event.seq != state.seq + 1:
-        raise SeqConflict(expected=state.seq + 1, actual=event.seq)
-
     new = state.model_copy(deep=True)
+    _apply_in_place(new, event)
+    return new
+
+
+def _apply_in_place(new: RoomState, event: Event) -> None:
+    """apply()'s body, mutating `new` directly. Split out so fold() can copy
+    once per replay rather than once per event — a per-event deep copy of a
+    state whose round history grows with every event made replay quadratic
+    (a 100-round game took seconds to rebuild on every poll)."""
+    if event.seq != new.seq + 1:
+        raise SeqConflict(expected=new.seq + 1, actual=event.seq)
+
     new.seq = event.seq
 
     if event.type == EventType.PLAYER_JOINED:
@@ -675,11 +684,11 @@ def apply(state: RoomState, event: Event) -> RoomState:
     else:  # pragma: no cover
         raise ValueError(f"Unknown event type: {event.type}")
 
-    return new
-
 
 def fold(state: RoomState, events: list[Event]) -> RoomState:
-    """Apply a list of events in order. Used both for a live command's cascade and for replay."""
+    """Apply a list of events in order. Used both for a live command's cascade and for replay.
+    Pure like apply(): the input is copied once up front, never mutated."""
+    new = state.model_copy(deep=True)
     for event in events:
-        state = apply(state, event)
-    return state
+        _apply_in_place(new, event)
+    return new

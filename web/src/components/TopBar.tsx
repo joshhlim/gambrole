@@ -110,8 +110,12 @@ function Logo() {
   );
 }
 
+// Anchored to the bar, not to the button that opened it: the bell sits
+// left of your name, so a panel hung off the bell's right edge ran past the
+// left side of a narrow phone. Right-aligned to the bar's padding and
+// capped at its inner width, it always fits.
 const panel =
-  "absolute right-0 top-11 z-20 w-60 overflow-hidden rounded-xl border border-border bg-surface shadow-lg";
+  "absolute right-5 top-13 z-20 w-60 max-w-[calc(100%-2.5rem)] overflow-hidden rounded-xl border border-border bg-surface shadow-lg";
 const item =
   "block w-full px-4 py-2.5 text-left text-sm text-foreground hover:bg-background";
 
@@ -204,7 +208,7 @@ export default function TopBar() {
           : "border-transparent"
       }`}
     >
-      <div className="mx-auto flex h-14 w-full max-w-md items-center justify-between px-5">
+      <div className="relative mx-auto flex h-14 w-full max-w-md items-center justify-between px-5">
         <button
           onClick={() => go("/")}
           data-testid="logo-home-btn"
@@ -214,7 +218,7 @@ export default function TopBar() {
         </button>
 
         <div className="flex items-center gap-1">
-          <div className="relative" ref={bellRef}>
+          <div ref={bellRef}>
             <button
               onClick={() => {
                 setBellOpen(!bellOpen);
@@ -256,7 +260,7 @@ export default function TopBar() {
             )}
           </div>
 
-          <div className="relative" ref={menuRef}>
+          <div ref={menuRef}>
             <button
               onClick={() => {
                 setMenuOpen(!menuOpen);

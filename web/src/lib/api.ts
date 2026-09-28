@@ -26,7 +26,11 @@ export class ApiError extends Error {
   }
 
   get conflict(): ConflictDetail | null {
-    return this.status === 409 ? (this.detail as ConflictDetail) : null;
+    // Not every 409 carries a state (e.g. "already in another room", or the
+    // server running out of retries) — callers resync from it, so only
+    // claim a conflict when there's something to resync to.
+    const d = this.detail as Partial<ConflictDetail> | null;
+    return this.status === 409 && d?.state ? (d as ConflictDetail) : null;
   }
 }
 
@@ -71,11 +75,24 @@ export const api = {
     post<RoomState>(`/rooms/${roomId}/start`, { expected_seq: expectedSeq, rules: rules ?? {} }),
   claimWin: (roomId: string, expectedSeq: number) =>
     post<RoomState>(`/rooms/${roomId}/win`, { expected_seq: expectedSeq }),
-  submitCards: (roomId: string, expectedSeq: number, cards: number) =>
-    post<RoomState>(`/rooms/${roomId}/cards`, { expected_seq: expectedSeq, cards }),
-  submitFor: (roomId: string, expectedSeq: number, targetPlayer: string, cards: number) =>
+  /** Names the round being answered, so the count isn't bounced by another
+   * player's count landing first — see the API's rooms._card_seq. */
+  submitCards: (roomId: string, expectedSeq: number, roundNo: number, cards: number) =>
+    post<RoomState>(`/rooms/${roomId}/cards`, {
+      expected_seq: expectedSeq,
+      round_no: roundNo,
+      cards,
+    }),
+  submitFor: (
+    roomId: string,
+    expectedSeq: number,
+    roundNo: number,
+    targetPlayer: string,
+    cards: number,
+  ) =>
     post<RoomState>(`/rooms/${roomId}/submit-for`, {
       expected_seq: expectedSeq,
+      round_no: roundNo,
       target_player: targetPlayer,
       cards,
     }),

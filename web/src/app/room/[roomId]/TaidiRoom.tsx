@@ -191,7 +191,7 @@ export default function TaidiRoom({ roomId, me }: { roomId: string; me: string }
           setCardsInput={setCardsInput}
           onClaimWin={() => run((seq) => api.claimWin(roomId, seq)).then((r) => r && setData(r))}
           onSubmitCards={(cards) =>
-            run((seq) => api.submitCards(roomId, seq, cards)).then((r) => {
+            run((seq) => api.submitCards(roomId, seq, currentRound.round_no, cards)).then((r) => {
               if (r) {
                 setData(r);
                 setCardsInput("");

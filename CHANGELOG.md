@@ -4,6 +4,38 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Long games no longer lag. Rebuilding a room from its event log deep-
+  copied the whole state once per event, which made every poll quadratic
+  in game length (a 100-round Taidi game took ~3.3s to rebuild on a laptop,
+  far more on Render's free tier, for every poll from every player).
+  `fold()` now copies once per replay; the same game rebuilds in ~5ms.
+  Applies to both Taidi and Mahjong.
+- Taidi card counts no longer bounce when several losers submit at once.
+  Submissions now name the round they answer (`round_no`) and land on the
+  room's current seq instead of racing each other on the client's; the
+  server retries a DB-level seq collision up to 5 times instead of once.
+- A DB-level seq collision now rolls back the failed transaction. Before,
+  the server's own retry ran inside the aborted transaction and returned a
+  500 — the retry path had never actually worked.
+- A poll response that set off before your own command landed can no
+  longer overwrite the newer state (which made a submitted card count
+  reappear as an empty form). Room state with a lower seq is ignored.
+- A 409 without a room state attached (e.g. out of retries) no longer
+  leaves a room's buttons stuck disabled.
+- The notification and account dropdowns no longer run off the left edge
+  of narrow phones. They were anchored to their own button — and the bell
+  sits left of your name — so they're now anchored to the top bar and
+  capped at its width.
+
+### Changed
+- Stats (`/stats/me`, `/stats/facts`) and game history (`/history/me`) load
+  every past room in two queries (`events_store.rebuild_many`) instead of
+  two serial queries per room — at ~110ms per statement, 30 past games had
+  cost over 6s before any work started.
+
 ## [0.6.1] - 2026-09-08
 
 ### Changed

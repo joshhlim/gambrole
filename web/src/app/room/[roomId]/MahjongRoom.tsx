@@ -84,11 +84,10 @@ export default function MahjongRoom({ roomId, me }: { roomId: string; me: string
         setBusy(false);
         return result;
       } catch (e) {
-        // ApiError.conflict is typed against Taidi's RoomState — read the
-        // detail directly instead, since a Mahjong endpoint's 409 actually
-        // carries a MahjongRoomState.
-        if (e instanceof ApiError && e.status === 409) {
-          const conflict = e.detail as { state: MahjongRoomState };
+        // ApiError.conflict is typed against Taidi's RoomState, but a
+        // Mahjong endpoint's 409 actually carries a MahjongRoomState.
+        if (e instanceof ApiError && e.conflict) {
+          const conflict = e.conflict as unknown as { state: MahjongRoomState };
           setData(conflict.state);
           seq = conflict.state.seq;
           continue;

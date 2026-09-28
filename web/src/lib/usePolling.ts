@@ -1,6 +1,23 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
+
+/** True when `next` is an older snapshot of the same room than `prev`.
+ *
+ * Room states carry a seq that only ever grows. A poll that set off just
+ * before your own command landed can arrive just after its response — and
+ * painting it would briefly undo what you did (a submitted card count
+ * reappearing as an empty form). Anything without a seq is never stale. */
+function isStale(prev: unknown, next: unknown): boolean {
+  const p = prev as { seq?: unknown; room_id?: unknown } | null;
+  const n = next as { seq?: unknown; room_id?: unknown } | null;
+  return (
+    typeof p?.seq === "number" &&
+    typeof n?.seq === "number" &&
+    p.room_id === n.room_id &&
+    n.seq < p.seq
+  );
+}
 
 /**
  * Polls `fetcher` on an interval while mounted. This stands in for Supabase
@@ -18,12 +35,22 @@ export function usePolling<T>(
    * bulk of what makes opening a new room feel slow. */
   initial: T | null = null,
 ) {
-  const [data, setData] = useState<T | null>(initial);
+  const [data, setDataRaw] = useState<T | null>(initial);
   const [error, setError] = useState<Error | null>(null);
   const fetcherRef = useRef(fetcher);
   useEffect(() => {
     fetcherRef.current = fetcher;
   });
+
+  const setData = useCallback((action: SetStateAction<T | null>) => {
+    setDataRaw((prev) => {
+      const next =
+        typeof action === "function"
+          ? (action as (p: T | null) => T | null)(prev)
+          : action;
+      return isStale(prev, next) ? prev : next;
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

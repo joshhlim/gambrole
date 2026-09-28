@@ -77,6 +77,30 @@ async def _get_taidi_state_or_404(session: AsyncSession, room_id: UUID) -> tuple
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
 
 
+# Enough for every loser at a full table to submit in the same instant.
+_DISPATCH_ATTEMPTS = 5
+
+
+def _card_seq(state: RoomState, expected_seq: int, round_no: int | None) -> int:
+    """The seq a card submission is checked against.
+
+    Card counts from different players don't conflict — each fills in its
+    own slot of the round, and the machine already refuses a duplicate or a
+    round that isn't collecting. Holding them to the client's seq meant that
+    losers submitting together raced each other, and whoever lost the race
+    saw their submit bounce. So when the client names the round it's
+    answering, only that is checked, and the count lands on whatever seq the
+    room is at now. Without a round_no (an older client) the strict seq
+    check still applies.
+    """
+    if round_no is None:
+        return expected_seq
+    current = state.current_round
+    if current is None or current.round_no != round_no:
+        raise SeqConflict(expected=expected_seq, actual=state.seq)
+    return state.seq
+
+
 def _as_json(state: AnyRoomState, invite_code: str, game_type: str) -> dict[str, Any]:
     return {**state.model_dump(mode="json"), "invite_code": invite_code, "game_type": game_type}
 
@@ -88,12 +112,14 @@ async def _dispatch(
 ) -> dict[str, Any]:
     """Rebuild state, run one command against it, persist, and return the new state.
 
-    Retries once on a genuine DB-level race (two requests computing the same
-    next seq); the second attempt rebuilds fresh state and re-validates, so
-    it either succeeds against the now-current state or raises a proper
-    MachineError instead of a raw integrity error.
+    Retries on a genuine DB-level race (two requests computing the same
+    next seq); each retry rebuilds fresh state and re-validates, so it
+    either succeeds against the now-current state or raises a proper
+    MachineError instead of a raw integrity error. More than one retry
+    because card submissions pin to the server's seq (see _card_seq), so a
+    table's worth of losers all submitting at once can keep colliding.
     """
-    for _attempt in range(2):
+    for _attempt in range(_DISPATCH_ATTEMPTS):
         state, invite_code = await _get_taidi_state_or_404(session, room_id)
         try:
             new_events = build_events(state)
@@ -111,7 +137,7 @@ async def _dispatch(
         try:
             await append_events(session, room_id, new_events, final_state=new_state)
         except IntegrityError:
-            continue  # someone else's event landed first — rebuild and retry once
+            continue  # someone else's event landed first — rebuild and retry
 
         return _as_json(new_state, invite_code, "taidi")
 
@@ -287,7 +313,7 @@ async def submit_cards(
         room_id,
         lambda state: machine.submit_cards(
             state,
-            expected_seq=body.expected_seq,
+            expected_seq=_card_seq(state, body.expected_seq, body.round_no),
             actor=user.user_id,
             cards=body.cards,
             now=utcnow(),
@@ -307,7 +333,7 @@ async def submit_for(
         room_id,
         lambda state: machine.submit_for(
             state,
-            expected_seq=body.expected_seq,
+            expected_seq=_card_seq(state, body.expected_seq, body.round_no),
             actor=user.user_id,
             target_player=body.target_player,
             cards=body.cards,

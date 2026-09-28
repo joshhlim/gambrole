@@ -192,5 +192,16 @@ again later without touching history.
   (`taidi.py`/`db.py`/`ui.py`/`game.py`/`taidi.db`) would need renaming
   plus a matching update to Streamlit Community Cloud's app settings —
   neither was requested yet.
-- No known open bugs. Everything shipped through v0.6.1 is tested and
-  CI-green.
+- Performance/concurrency pass (2026-09-28, see CHANGELOG [Unreleased]):
+  fold is now linear, Taidi card submissions pin to `round_no` rather than
+  seq, stale polls are ignored client-side, the top-bar dropdowns fit
+  narrow phones, and stats/history batch-load rooms via `rebuild_many`.
+  Still to do: move the Render service to the same region as Supabase
+  (statements cost ~110ms each — likely the biggest remaining latency
+  win; Render can't change an existing service's region, so it means a
+  new service + `region:` in `render.yaml` + updating the Vercel API URL
+  and keep-warm URL — needs the user); then maybe a per-process folded-
+  state cache plus "unchanged since seq N" poll responses.
+- `web/e2e` is broken since `d56fb01`: every spec waits for a
+  "Signed in as …" line the home page no longer renders. Needs its sign-in
+  helper updated before it can verify anything again.
