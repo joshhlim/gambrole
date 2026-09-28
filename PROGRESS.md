@@ -196,12 +196,15 @@ again later without touching history.
   fold is now linear, Taidi card submissions pin to `round_no` rather than
   seq, stale polls are ignored client-side, the top-bar dropdowns fit
   narrow phones, and stats/history batch-load rooms via `rebuild_many`.
-  Still to do: move the Render service to the same region as Supabase
-  (statements cost ~110ms each — likely the biggest remaining latency
-  win; Render can't change an existing service's region, so it means a
-  new service + `region:` in `render.yaml` + updating the Vercel API URL
-  and keep-warm URL — needs the user); then maybe a per-process folded-
-  state cache plus "unchanged since seq N" poll responses.
+  The API also moved (2026-09-28) from Render's default Oregon region to
+  `singapore`, next to Supabase's `ap-southeast-1`: a new service,
+  `gambrole-api-sg` (https://gambrole-api-sg.onrender.com), since Render
+  can't move a service between regions. A request with a DB lookup went
+  from ~1.15s to ~0.12s. Vercel's `NEXT_PUBLIC_API_URL` and keep-warm point
+  at it. The old `gambrole-api` service is to be deleted by the user once
+  the new one has been tested. Maybe later, only if polling still feels
+  slow: a per-process folded-state cache plus "unchanged since seq N"
+  poll responses.
 - `web/e2e` is broken since `d56fb01`: every spec waits for a
   "Signed in as …" line the home page no longer renders. Needs its sign-in
   helper updated before it can verify anything again.

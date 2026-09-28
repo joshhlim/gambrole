@@ -92,12 +92,22 @@ Environment):
 - `TAIDI_CORS_ORIGINS` — leave as `["http://localhost:3000"]` for now;
   step 4 updates it once the Vercel URL exists.
 
-Copy the Render URL it gives you (`https://gambrole-api.onrender.com` or
-similar) — step 3 needs it.
+Copy the Render URL it gives you (`https://gambrole-api-sg.onrender.com` or
+similar) — step 3 needs it. The Blueprint pins the service to Render's
+`singapore` region, next to the Supabase project (`ap-southeast-1`); every
+request makes several database round trips, so keep the two in the same
+region. Its first deploy fails until the `sync: false` variables above are
+filled in — the build runs `alembic upgrade head`, which needs
+`TAIDI_DATABASE_URL`. Fill them in and redeploy.
 
 **3. Web on Vercel** — [vercel.com](https://vercel.com) → New Project →
 import this repo → set **Root Directory** to `web`. Add these environment
 variables before deploying:
+
+Don't mark any of these **Sensitive** — Vercel won't save a Sensitive
+variable with a `NEXT_PUBLIC_` name, and none of them are secret (the
+browser needs every one). They're baked in at build time, so changing one
+later needs a redeploy.
 
 ```
 NEXT_PUBLIC_API_URL=<the Render URL from step 2>
