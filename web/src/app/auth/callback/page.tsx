@@ -3,7 +3,13 @@
 import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase, wasPasswordRecovery } from "@/lib/auth";
+import {
+  LOCAL_RESET_PARAM,
+  confirmLocalPasswordReset,
+  isLocalAuth,
+  supabase,
+  wasPasswordRecovery,
+} from "@/lib/auth";
 import { updatePassword } from "@/lib/account";
 
 const inputCls =
@@ -13,8 +19,12 @@ function CallbackInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const code = searchParams.get("code");
+  // Local mode's reset link (see lib/auth.ts): no exchange to wait for —
+  // the token is redeemed when the new password is saved.
+  const localToken = isLocalAuth() ? searchParams.get(LOCAL_RESET_PARAM) : null;
   const [exchangeError, setExchangeError] = useState<string | null>(null);
-  const [isRecovery, setIsRecovery] = useState(false);
+  const [supabaseRecovery, setIsRecovery] = useState(false);
+  const isRecovery = supabaseRecovery || localToken !== null;
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -69,7 +79,8 @@ function CallbackInner() {
     }
     setBusy(true);
     try {
-      await updatePassword(password);
+      if (localToken !== null) await confirmLocalPasswordReset(localToken, password);
+      else await updatePassword(password);
       setSaved(true);
       setTimeout(() => router.replace("/"), 1200);
     } catch (e) {
@@ -79,11 +90,15 @@ function CallbackInner() {
     }
   }
 
-  const staticError = !supabase
-    ? "Sign-in isn't configured in this environment."
-    : !code
-      ? "This link is missing or already used."
-      : null;
+  const staticError = isLocalAuth()
+    ? localToken
+      ? null
+      : "This link is missing or already used."
+    : !supabase
+      ? "Sign-in isn't configured in this environment."
+      : !code
+        ? "This link is missing or already used."
+        : null;
   const error = staticError ?? exchangeError;
 
   if (error) {

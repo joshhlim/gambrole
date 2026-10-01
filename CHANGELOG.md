@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- A third sign-in mode, `local`, for internal testing: the same email +
+  password screens (sign up, log in, forgot password, Settings) backed by
+  the API's own `test_accounts` table instead of Supabase. Everything is
+  stored in plain text so it can be read directly; accounts are separate
+  from Supabase ones. Reset links are logged instead of emailed. Toggled
+  with `TAIDI_AUTH_MODE=local` (plus `TAIDI_LOCAL_JWT_SECRET`) on the API
+  and `NEXT_PUBLIC_AUTH_MODE=local` on the web app — see README.
+
 ### Fixed
 - Long games no longer lag. Rebuilding a room from its event log deep-
   copied the whole state once per event, which made every poll quadratic

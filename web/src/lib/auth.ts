@@ -38,9 +38,14 @@ function storageRemove(key: string): void {
 
 // "dev" (the default, used locally): the app's own POST /auth/dev-login
 // mints a token for any name, no external provider. "supabase": real
-// accounts via Supabase Auth (magic link). Whichever is active, everything
-// below getStoredAuth() behaves identically to the rest of the app.
+// accounts via Supabase Auth (email + password). "local": the same email +
+// password screens, but backed by the API's own plain-text test_accounts
+// table instead of Supabase — for internal testing (see the API's
+// routers/local_auth.py; TAIDI_AUTH_MODE must be "local" there too).
+// Whichever is active, everything below getStoredAuth() behaves identically
+// to the rest of the app.
 const AUTH_MODE = process.env.NEXT_PUBLIC_AUTH_MODE ?? "dev";
+const LOCAL = AUTH_MODE === "local";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -48,6 +53,10 @@ export const supabase =
   AUTH_MODE === "supabase" && SUPABASE_URL && SUPABASE_ANON_KEY
     ? createBrowserClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null;
+
+/** True when sign-in is by email + password — Supabase or local mode. The
+ * screens for both are identical; only the functions below differ. */
+export const passwordAuth = supabase !== null || LOCAL;
 
 export interface CurrentUser {
   user_id: string;
@@ -147,7 +156,7 @@ function announceAuthChange(): void {
   window.dispatchEvent(new Event(AUTH_EVENT));
 }
 
-/** Dev mode only — Supabase manages its own persistence via cookies. */
+/** Dev and local modes — Supabase manages its own persistence via cookies. */
 export function storeAuth(auth: StoredAuth): void {
   storageSet(TOKEN_KEY, auth.token);
   storageSet(USER_KEY, JSON.stringify(auth.user));
@@ -250,6 +259,53 @@ export async function devLogin(displayName: string): Promise<StoredAuth> {
   return auth;
 }
 
+interface LocalSession {
+  access_token: string;
+  user_id: string;
+  display_name: string;
+}
+
+/** Local mode: one call to the API's /auth/local endpoints. Errors carry
+ * the API's message, which mirrors Supabase's wording for the same case. */
+export async function localAuthRequest(
+  method: "POST" | "PATCH",
+  path: string,
+  body: unknown,
+  token?: string | null,
+): Promise<Response> {
+  if (!API_URL) throw new Error(API_URL_MISSING);
+  const res = await fetch(`${API_URL}/auth/local${path}`, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const detail = (await res.json()).detail;
+      if (typeof detail === "string") message = detail;
+      else if (Array.isArray(detail)) message = "Check the details and try again.";
+    } catch {
+      /* keep the status message */
+    }
+    throw new Error(message);
+  }
+  return res;
+}
+
+/** Stores a local-mode session exactly as dev mode stores its token. */
+export function storeLocalSession(data: LocalSession): StoredAuth {
+  const auth: StoredAuth = {
+    token: data.access_token,
+    user: { user_id: data.user_id, display_name: data.display_name },
+  };
+  storeAuth(auth);
+  return auth;
+}
+
 /**
  * Supabase mode: create an account with email + password. `displayName`
  * rides along in `options.data`, which Supabase stores as the user's
@@ -267,6 +323,14 @@ export async function signUpWithPassword(
   password: string,
   displayName: string,
 ): Promise<StoredAuth | null> {
+  if (LOCAL) {
+    const res = await localAuthRequest("POST", "/signup", {
+      email,
+      password,
+      display_name: displayName,
+    });
+    return storeLocalSession(await res.json());
+  }
   if (!supabase) throw new Error("Supabase auth is not configured.");
   const { data, error } = await supabase.auth.signUp({
     email,
@@ -281,6 +345,10 @@ export async function signInWithPassword(
   email: string,
   password: string,
 ): Promise<StoredAuth> {
+  if (LOCAL) {
+    const res = await localAuthRequest("POST", "/login", { email, password });
+    return storeLocalSession(await res.json());
+  }
   if (!supabase) throw new Error("Supabase auth is not configured.");
   const { data, error } = await supabase.auth.signInWithPassword({
     email,
@@ -296,9 +364,28 @@ export async function signInWithPassword(
  * the link is clicked — /auth/callback listens for it and prompts for a
  * new password instead of just signing the user in. */
 export async function requestPasswordReset(email: string): Promise<void> {
+  const redirectTo = `${window.location.origin}/auth/callback`;
+  if (LOCAL) {
+    // No email in local mode: the API logs the link (and leaves its token
+    // in test_accounts) instead of sending it.
+    await localAuthRequest("POST", "/password-reset", { email, redirect_to: redirectTo });
+    return;
+  }
   if (!supabase) throw new Error("Supabase auth is not configured.");
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${window.location.origin}/auth/callback`,
-  });
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
   if (error) throw error;
+}
+
+/** Local mode: the reset link carries `?reset_token=` rather than
+ * Supabase's `?code=`, and redeeming it sets the password and signs you in
+ * in one step. */
+export const LOCAL_RESET_PARAM = "reset_token";
+
+export function isLocalAuth(): boolean {
+  return LOCAL;
+}
+
+export async function confirmLocalPasswordReset(token: string, password: string): Promise<void> {
+  const res = await localAuthRequest("POST", "/password-reset/confirm", { token, password });
+  storeLocalSession(await res.json());
 }

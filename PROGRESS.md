@@ -225,6 +225,13 @@ again later without touching history.
     actions hidden without `APP_PASSCODE`, throttled passcode).
   - Vercel builds now fail if `NEXT_PUBLIC_API_URL` is unset — make sure
     it's set for Preview as well as Production if previews are used.
+- Local sign-in mode (2026-09-28): `TAIDI_AUTH_MODE=local` +
+  `NEXT_PUBLIC_AUTH_MODE=local` swap Supabase for the plain-text
+  `test_accounts` table (user's explicit choice: no hashing, readable
+  storage, unlinked to Supabase accounts, usable on the live site). The
+  screens are unchanged — `web/src/lib/auth.ts`/`account.ts` route to
+  `/auth/local/*` (api/app/routers/local_auth.py) when local. Reset links
+  go to the API log. Not currently switched on anywhere.
 - Deliberately not done in the audit pass: lazy-loading supabase-js (the
   password-recovery listener needs the client at module load), Sentry-style
   error reporting (needs an account), API versioning.

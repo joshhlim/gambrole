@@ -173,6 +173,31 @@ Open the Vercel URL, sign up with an email and password, and you're on the
 real stack. `web/README.md` and `api/README.md` have the day-to-day dev commands;
 ADR-0005 has the reasoning behind these choices.
 
+## Test accounts without Supabase
+
+For internal testing, the room app can run its email + password sign-in
+against its own `test_accounts` table instead of Supabase. The screens are
+identical; accounts are separate from Supabase ones (switching modes means a
+different set of players), and **everything is stored in plain text** —
+emails, passwords, names, and reset tokens — so the table can be read as-is
+(Supabase Table Editor, or `select * from test_accounts` in any SQL client).
+Don't let anyone sign up with a password they use elsewhere.
+
+Switch on (both sides must match):
+
+- **API**: `TAIDI_AUTH_MODE=local` and `TAIDI_LOCAL_JWT_SECRET` (32+ random
+  characters; the API won't start without it). On Render, change
+  `TAIDI_AUTH_MODE` in `render.yaml` and set the secret in the dashboard.
+- **Web**: `NEXT_PUBLIC_AUTH_MODE=local`, then redeploy (it's baked in at
+  build time). The Supabase variables can stay set; they're ignored.
+
+There's no email in this mode: "Forgot password" still says to check your
+email, but the reset link is written to the API log (Render → Logs) and its
+token is in the account's `reset_token` column —
+open `<web url>/auth/callback?reset_token=<token>`. Email changes in
+Settings apply immediately. Switch back by restoring both variables to
+`supabase`.
+
 ## Backups (room app)
 
 `.github/workflows/backup.yml` runs weekly (and on demand from the Actions

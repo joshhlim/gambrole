@@ -76,6 +76,26 @@ def mint_dev_token(display_name: str, user_id: UUID | None = None) -> tuple[str,
     return token, uid
 
 
+# Marks a token as ours in local mode, so a dev token (different secret
+# anyway) or anything else HS256-signed can't be mistaken for one.
+LOCAL_ISSUER = "gambrole-local"
+
+
+def mint_local_token(user_id: UUID, display_name: str, email: str) -> str:
+    """Local mode only: a session token for a test_accounts row. Carries the
+    same claims the rest of the app reads from a Supabase token (sub, a
+    display name, email), so nothing downstream can tell the difference."""
+    assert settings.local_jwt_secret is not None  # main.py refuses to start without it
+    payload = {
+        "sub": str(user_id),
+        "display_name": display_name,
+        "email": email,
+        "iss": LOCAL_ISSUER,
+        "exp": utcnow() + timedelta(minutes=settings.access_token_ttl_minutes),
+    }
+    return jwt.encode(payload, settings.local_jwt_secret, algorithm="HS256")
+
+
 # A token naming a key id we don't have forces a JWKS refetch — which is how
 # a legitimate key rotation gets picked up, but also something anyone can
 # trigger with made-up tokens. Refetch at most this often.
@@ -117,6 +137,21 @@ async def _decode(token: str) -> dict[str, Any]:
                 settings.dev_jwt_secret,
                 algorithms=["HS256"],
                 options={"verify_aud": False, "require": ["exp", "sub"]},
+            )
+        except jwt.PyJWTError as e:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Invalid token: {e}") from e
+    if settings.auth_mode == "local":
+        if not settings.local_jwt_secret:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, "Local auth is not configured."
+            )
+        try:
+            return jwt.decode(
+                token,
+                settings.local_jwt_secret,
+                algorithms=["HS256"],
+                issuer=LOCAL_ISSUER,
+                options={"verify_aud": False, "require": ["exp", "sub", "iss"]},
             )
         except jwt.PyJWTError as e:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Invalid token: {e}") from e
@@ -168,7 +203,7 @@ MAX_DISPLAY_NAME = 100
 
 
 def _display_name_from_claims(claims: dict[str, Any]) -> str:
-    if settings.auth_mode == "dev":
+    if settings.auth_mode in ("dev", "local"):
         name = claims.get("display_name")
     else:
         # Supabase's default claims don't carry a display name unless the

@@ -143,6 +143,24 @@ friendships = Table(
     Index("ix_friendships_addressee", "addressee_id"),
 )
 
+# Local-mode accounts (TAIDI_AUTH_MODE=local) — internal testing only.
+# Deliberately plain: passwords are stored as typed and reset tokens as
+# issued, so the whole table can be read as-is in a SQL client or the
+# Supabase Table Editor. Unrelated to Supabase accounts; user_id is minted
+# here and joins to users.user_id like any other player.
+test_accounts = Table(
+    "test_accounts",
+    metadata,
+    Column("user_id", PGUUID(as_uuid=True), primary_key=True),
+    Column("email", String(320), nullable=False, unique=True),
+    Column("password", String(128), nullable=False),
+    Column("display_name", String(100), nullable=False),
+    Column("reset_token", String(64), nullable=True),
+    Column("reset_expires_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
 settlements = Table(
     "settlements",
     metadata,

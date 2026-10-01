@@ -39,8 +39,13 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.13.14" # Render needs the full patch version; keep in step with CI's PYTHON_VERSION
+      # "local" swaps Supabase for the plain-text test_accounts table (internal
+      # testing — see README "Test accounts without Supabase"). Change it here,
+      # not in the dashboard: a Blueprint sync overwrites dashboard edits.
       - key: TAIDI_AUTH_MODE
         value: supabase
+      - key: TAIDI_LOCAL_JWT_SECRET
+        sync: false # only needed when TAIDI_AUTH_MODE=local — 32+ random characters, e.g. `openssl rand -hex 32`
       - key: TAIDI_DATABASE_URL
         sync: false # postgresql+asyncpg://... — Supabase project settings → Database → Connection string
       - key: TAIDI_SUPABASE_URL

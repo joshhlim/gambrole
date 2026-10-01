@@ -18,6 +18,7 @@ from .routers import auth as auth_router
 from .routers import debts as debts_router
 from .routers import friends as friends_router
 from .routers import history as history_router
+from .routers import local_auth as local_auth_router
 from .routers import mahjong as mahjong_router
 from .routers import notifications as notifications_router
 from .routers import rooms as rooms_router
@@ -35,7 +36,9 @@ MAX_BODY_BYTES = 64 * 1024
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Fail closed: see Settings.auth_mode for why there's no default.
     if settings.auth_mode is None:
-        raise RuntimeError("TAIDI_AUTH_MODE must be set to 'dev' or 'supabase'.")
+        raise RuntimeError("TAIDI_AUTH_MODE must be set to 'dev', 'supabase' or 'local'.")
+    if settings.auth_mode == "local" and len(settings.local_jwt_secret or "") < 32:
+        raise RuntimeError("TAIDI_AUTH_MODE=local needs TAIDI_LOCAL_JWT_SECRET (32+ characters).")
     yield
 
 
@@ -63,6 +66,7 @@ async def limit_body_size(
 
 
 app.include_router(auth_router.router)
+app.include_router(local_auth_router.router)
 app.include_router(rooms_router.router)
 app.include_router(mahjong_router.router)
 app.include_router(stats_router.router)

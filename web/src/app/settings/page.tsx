@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { updateDisplayName, updateEmail, updatePassword } from "@/lib/account";
-import { signOut, supabase, useStoredUser, type CurrentUser } from "@/lib/auth";
+import { getAccountEmail, updateDisplayName, updateEmail, updatePassword } from "@/lib/account";
+import { passwordAuth, signOut, useStoredUser, type CurrentUser } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
 import { friendsApi } from "@/lib/friendsApi";
 
@@ -24,15 +24,15 @@ export default function SettingsPage() {
   }, [checked, user, router]);
 
   useEffect(() => {
-    if (!user || !supabase) return;
-    supabase.auth.getUser().then(({ data }) => {
-      setEmail(data.user?.email ?? null);
-      setEmailChecked(true);
-    });
+    if (!user || !passwordAuth) return;
+    getAccountEmail()
+      .then(setEmail)
+      .catch(() => setEmail(null))
+      .finally(() => setEmailChecked(true));
   }, [user]);
 
   // Only the Supabase-backed sections need the email resolved first.
-  if (!user || (supabase && !emailChecked)) {
+  if (!user || (passwordAuth && !emailChecked)) {
     return <main className="flex-1 flex items-center justify-center text-muted text-sm">Loading…</main>;
   }
 
@@ -54,7 +54,7 @@ export default function SettingsPage() {
             with. Everything below it is Supabase account management and
             only exists for real accounts. */}
         <UsernameForm />
-        {supabase && (
+        {passwordAuth && (
           <AccountForms
             user={user}
             initialEmail={email ?? ""}

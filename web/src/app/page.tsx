@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { devLogin, supabase, useStoredUser } from "@/lib/auth";
+import { devLogin, passwordAuth, useStoredUser } from "@/lib/auth";
 import type { ActiveRoom } from "@/lib/types";
 import SupabaseAuthForm from "@/components/SupabaseAuthForm";
 
@@ -78,7 +78,7 @@ export default function HomePage() {
           </div>
 
           {!user ? (
-            supabase ? (
+            passwordAuth ? (
               <SupabaseAuthForm
                 onSignedIn={(u, text) => text && setNotice({ userId: u.user_id, text })}
               />

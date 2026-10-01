@@ -14,12 +14,18 @@ class Settings(BaseSettings):
 
     # "dev": local HS256 tokens minted by POST /auth/dev-login, no external IdP needed.
     # "supabase": verify tokens issued by Supabase Auth instead.
+    # "local": email + password accounts kept in this app's own `test_accounts`
+    # table, in plain text, for internal testing — see app/local_auth.py.
     # Deliberately no default: dev mode trusts any token signed with a
     # secret that's committed to this repo, so a deploy that forgot to set
     # it must refuse to start (main.py) rather than silently let anyone
     # sign in as anyone. Scripts and migrations don't need it.
-    auth_mode: Literal["dev", "supabase"] | None = None
+    auth_mode: Literal["dev", "supabase", "local"] | None = None
     dev_jwt_secret: str = "dev-only-insecure-secret-change-me"
+    # Signs local-mode tokens. No default: unlike the dev secret it isn't
+    # committed anywhere, so a local-mode deploy can't be signed into by
+    # anyone who has read this repo. main.py refuses to start without it.
+    local_jwt_secret: str | None = None
     access_token_ttl_minutes: int = 60 * 24 * 7  # a week — fine for a party-game app
 
     # Supabase projects sign tokens one of two ways, and a project only ever
