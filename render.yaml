@@ -43,7 +43,7 @@ services:
       # testing — see README "Test accounts without Supabase"). Change it here,
       # not in the dashboard: a Blueprint sync overwrites dashboard edits.
       - key: TAIDI_AUTH_MODE
-        value: supabase
+        value: local
       - key: TAIDI_ASSET_SECRET
         sync: false # signs profile-photo URLs — 32+ random characters (openssl rand -hex 32). Without it photo URLs change on every restart.
       - key: TAIDI_LOCAL_JWT_SECRET
