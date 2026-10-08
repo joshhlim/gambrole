@@ -186,10 +186,12 @@ def test_passcode_gate(app_path, monkeypatch):
     at.run()
     assert not at.exception
     assert not [b for b in at.button if b.key == "tile_new"], "menu visible without passcode"
-    at.text_input(key="passcode_input").input("wrong").run()
+    # Typed and submitted in one run: since Streamlit 1.65 an unsubmitted
+    # form value is dropped if the script reruns before the submit.
+    at.text_input(key="passcode_input").input("wrong")
     [b for b in at.button if getattr(b, "label", "") == "Enter"][0].click().run()
     assert at.error
-    at.text_input(key="passcode_input").input("1234").run()
+    at.text_input(key="passcode_input").input("1234")
     [b for b in at.button if getattr(b, "label", "") == "Enter"][0].click().run()
     assert at.session_state["authed"] is True
     assert [b for b in at.button if b.key == "tile_new"]
@@ -225,7 +227,7 @@ def test_passcode_gate_throttles_after_repeated_failures(app_path, monkeypatch):
     at.run()
 
     def attempt(code):
-        at.text_input(key="passcode_input").input(code).run()
+        at.text_input(key="passcode_input").input(code)
         [b for b in at.button if getattr(b, "label", "") == "Enter"][0].click().run()
 
     for _ in range(5):
