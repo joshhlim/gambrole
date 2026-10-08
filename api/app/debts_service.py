@@ -6,7 +6,7 @@ events_store.append_events) — this module only reads and transitions them.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -14,8 +14,10 @@ from sqlalchemy import CursorResult, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import events as events_table
+from .db import guests as guests_table
 from .db import settlements as settlements_table
 from .events_store import rebuild_many
+from .identity import identity_ids
 from .time import utcnow
 from .users_service import profiles_for
 
@@ -35,6 +37,9 @@ class DebtView(BaseModel):
     # is exactly the thing that erodes trust in the numbers.
     ended_by: str | None
     auto_ended: bool
+    # A guest nobody has claimed yet can't mark anything paid or confirm
+    # it, so the account holder settles it alone (see settle()).
+    counterparty_is_guest: bool = False
 
 
 class DebtsResponse(BaseModel):
@@ -60,17 +65,31 @@ class SettlementInvalidTransition(Exception):
     pass
 
 
+async def _guests_by_id(session: AsyncSession, ids: set[UUID]) -> dict[UUID, Any]:
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(select(guests_table).where(guests_table.c.guest_id.in_(ids)))
+    ).all()
+    return {row.guest_id: row for row in rows}
+
+
 async def build_debts_for(session: AsyncSession, player_id: UUID) -> DebtsResponse:
+    ids = await identity_ids(session, player_id)
     rows = (
         await session.execute(
             select(settlements_table).where(
                 or_(
-                    settlements_table.c.from_player == player_id,
-                    settlements_table.c.to_player == player_id,
+                    settlements_table.c.from_player.in_(ids),
+                    settlements_table.c.to_player.in_(ids),
                 )
             )
         )
     ).all()
+    counterparties = {row.to_player if row.from_player in ids else row.from_player for row in rows}
+    guests = await _guests_by_id(session, counterparties)
+    claimed_by = {gid: g.claimed_by for gid, g in guests.items() if g.claimed_by}
+    claimed_profiles = await profiles_for(session, list(set(claimed_by.values())))
 
     room_ids = {row.room_id for row in rows}
     names_by_room: dict[UUID, dict[UUID, str]] = {}
@@ -109,8 +128,16 @@ async def build_debts_for(session: AsyncSession, player_id: UUID) -> DebtsRespon
     owing: list[DebtView] = []
     owed: list[DebtView] = []
     for row in rows:
-        is_owing = row.from_player == player_id
+        is_owing = row.from_player in ids
         counterparty_id = row.to_player if is_owing else row.from_player
+        is_unclaimed_guest = counterparty_id in guests and counterparty_id not in claimed_by
+        counterparty_name = names_by_room[row.room_id].get(counterparty_id, "Player")
+        # A guest who has since claimed their games is that account now.
+        if counterparty_id in claimed_by:
+            counterparty_id = claimed_by[counterparty_id]
+            profile = claimed_profiles.get(counterparty_id)
+            if profile:
+                counterparty_name = profile.display_name
         end_row = end_by_room.get(row.room_id)
         auto_ended = bool(end_row is not None and (end_row.payload or {}).get("reason") == "stale")
         ended_by: str | None = None
@@ -121,7 +148,8 @@ async def build_debts_for(session: AsyncSession, player_id: UUID) -> DebtsRespon
             room_id=row.room_id,
             game_type=row.game_type,
             counterparty_id=counterparty_id,
-            counterparty_display_name=names_by_room[row.room_id].get(counterparty_id, "Player"),
+            counterparty_display_name=counterparty_name,
+            counterparty_is_guest=is_unclaimed_guest,
             amount_cents=row.amount_cents,
             status=row.status,
             created_at=row.created_at,
@@ -155,7 +183,7 @@ async def _transition(
     ).first()
     if row is None:
         raise SettlementNotFound(settlement_id)
-    if getattr(row, authorized_column) != actor_id:
+    if getattr(row, authorized_column) not in await identity_ids(session, actor_id):
         raise SettlementForbidden(settlement_id)
     if row.status != expected_status:
         raise SettlementInvalidTransition(
@@ -208,3 +236,40 @@ async def reject(session: AsyncSession, settlement_id: UUID, actor_id: UUID) -> 
         expected_status="marked_paid",
         new_status="pending",
     )
+
+
+async def settle(session: AsyncSession, settlement_id: UUID, actor_id: UUID) -> DebtActionResult:
+    """Close a debt with a guest nobody has claimed, from either side, in one
+    step. The usual two-step (debtor marks paid, creditor confirms) needs
+    both people to have the app; a guest doesn't."""
+    row = (
+        await session.execute(
+            select(settlements_table).where(settlements_table.c.id == settlement_id)
+        )
+    ).first()
+    if row is None:
+        raise SettlementNotFound(settlement_id)
+    ids = await identity_ids(session, actor_id)
+    if row.from_player in ids:
+        other = row.to_player
+    elif row.to_player in ids:
+        other = row.from_player
+    else:
+        raise SettlementForbidden(settlement_id)
+    guest = (await _guests_by_id(session, {other})).get(other)
+    if guest is None or guest.claimed_by is not None:
+        raise SettlementInvalidTransition("Only a debt with a guest can be settled this way.")
+    if row.status == "approved":
+        raise SettlementInvalidTransition("This debt is already settled.")
+
+    now = utcnow()
+    result = await session.execute(
+        update(settlements_table)
+        .where(settlements_table.c.id == settlement_id, settlements_table.c.status == row.status)
+        .values(status="approved", updated_at=now)
+    )
+    assert isinstance(result, CursorResult)
+    if result.rowcount == 0:
+        raise SettlementInvalidTransition("This debt was already updated — please refresh.")
+    await session.commit()
+    return DebtActionResult(settlement_id=settlement_id, status="approved", updated_at=now)

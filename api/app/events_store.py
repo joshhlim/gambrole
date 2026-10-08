@@ -21,7 +21,7 @@ from mahjong_core import machine as mahjong_machine
 from mahjong_core.models import Event as MahjongEvent
 from mahjong_core.models import EventType as MahjongEventType
 from mahjong_core.models import RoomState as MahjongRoomState
-from sqlalchemy import insert, select, union, update
+from sqlalchemy import delete, insert, select, union, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,10 +35,10 @@ from taidi_core.settlement import minimize_transfers
 
 from .config import settings
 from .db import events as events_table
+from .db import guests as guests_table
 from .db import room_participants as room_participants_table
 from .db import rooms as rooms_table
 from .db import settlements as settlements_table
-from .money import MAHJONG_CHIP_VALUE_CENTS
 from .time import utcnow
 
 AnyRoomState = TaidiRoomState | MahjongRoomState
@@ -57,6 +57,8 @@ class RoomMeta:
     # without sending any. Stored server-side so they survive the host's
     # tab closing (they used to live only in that tab's sessionStorage).
     draft_rules: dict[str, Any] | None
+    # The group this game belongs to, if any (see db.groups).
+    group_id: UUID | None = None
 
 
 # Written into a game_ended event's payload when the inactivity backstop
@@ -204,6 +206,7 @@ async def create_room(
     now: datetime,
     game_type: str = "taidi",
     draft_rules: dict[str, Any] | None = None,
+    group_id: UUID | None = None,
 ) -> tuple[AnyRoomState, RoomMeta]:
     await ensure_no_other_active_room(session, host_id)
     invite_code = generate_invite_code()
@@ -216,10 +219,13 @@ async def create_room(
             created_at=now,
             game_type=game_type,
             draft_rules=draft_rules,
+            group_id=group_id,
         )
     )
     await session.commit()
-    meta = RoomMeta(invite_code=invite_code, game_type=game_type, draft_rules=draft_rules)
+    meta = RoomMeta(
+        invite_code=invite_code, game_type=game_type, draft_rules=draft_rules, group_id=group_id
+    )
     if game_type == "mahjong":
         mahjong_state = MahjongRoomState.new(
             room_id=room_id, host_id=host_id, host_display_name=host_display_name, now=now
@@ -348,7 +354,10 @@ async def _rebuild(
     the room (the staleness backstop) doesn't re-load or re-derive them."""
     seed = await _load_room_seed(session, room_id)
     meta = RoomMeta(
-        invite_code=seed.invite_code, game_type=seed.game_type, draft_rules=seed.draft_rules
+        invite_code=seed.invite_code,
+        game_type=seed.game_type,
+        draft_rules=seed.draft_rules,
+        group_id=seed.group_id,
     )
     if seed.game_type == "mahjong":
         mahjong_state = MahjongRoomState.new(
@@ -546,6 +555,29 @@ async def append_events(
             .on_conflict_do_nothing(index_elements=["room_id", "player_id"])
         )
 
+    # Guests get a row (and a claim token) as they're seated, and lose it if
+    # the host takes them off the lobby list before the game starts.
+    guest_joins = [
+        {
+            "guest_id": UUID(e.payload["player_id"]),
+            "room_id": room_id,
+            "display_name": e.payload["display_name"],
+            "claim_token": secrets.token_urlsafe(24),
+            "created_at": e.created_at,
+        }
+        for e in new_events
+        if e.type.value == "player_joined" and e.payload.get("is_guest")
+    ]
+    if guest_joins:
+        await session.execute(insert(guests_table), guest_joins)
+    left = [UUID(e.payload["player_id"]) for e in new_events if e.type.value == "player_left"]
+    if left:
+        await session.execute(
+            delete(guests_table).where(
+                guests_table.c.guest_id.in_(left), guests_table.c.claimed_by.is_(None)
+            )
+        )
+
     for e in new_events:
         new_status = _ROOM_STATUS_BY_EVENT_TYPE.get(e.type.value)
         if new_status is None:
@@ -561,7 +593,6 @@ async def append_events(
         # debts on — only a genuine game_ended transition settles up.
         if new_status == "ended" and final_state is not None:
             game_type = "mahjong" if isinstance(final_state, MahjongRoomState) else "taidi"
-            rate = MAHJONG_CHIP_VALUE_CENTS if game_type == "mahjong" else 1
             raw_settlements = minimize_transfers(final_state.balances)
             if raw_settlements:
                 await session.execute(
@@ -574,7 +605,7 @@ async def append_events(
                                 "game_type": game_type,
                                 "from_player": s.from_player,
                                 "to_player": s.to_player,
-                                "amount_cents": s.amount_cents * rate,
+                                "amount_cents": s.amount_cents,
                                 "status": "pending",
                                 "created_at": e.created_at,
                                 "updated_at": e.created_at,

@@ -15,9 +15,10 @@ table from `auth.users` once so the directory is complete on day one.
 from __future__ import annotations
 
 import re
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -25,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import CurrentUser
 from .db import users as users_table
+from .profile_service import Preferences, avatar_url, read_preferences
 from .time import utcnow
 
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,24}$")
@@ -77,15 +79,34 @@ async def assign_username(session: AsyncSession, user_id: UUID, base: str) -> st
 
 class UserProfile(BaseModel):
     """What one player may know about another. Note the absence of email:
-    it's searchable but never disclosed."""
+    it's searchable but never disclosed. Photo and accent are shown wherever
+    the name is (games, friends, debts) — they're how you're recognised."""
 
     user_id: UUID
     display_name: str
     username: str | None
+    avatar_url: str | None = None
+    accent: str | None = None
 
 
 class MyProfile(UserProfile):
     email: str | None  # your own address, so Settings can show what's on file
+    bio: str | None = None
+    city: str | None = None
+    preferences: Preferences = Field(default_factory=Preferences)
+    profile_visibility: str = "everyone"
+    stats_visibility: str = "friends"
+    searchable: bool = True
+
+
+def profile_of(row: Any) -> UserProfile:
+    return UserProfile(
+        user_id=row.user_id,
+        display_name=row.display_name,
+        username=row.username,
+        avatar_url=avatar_url(row.user_id, row.avatar_version),
+        accent=row.accent,
+    )
 
 
 class InvalidUsername(Exception):
@@ -144,10 +165,14 @@ async def get_profile(session: AsyncSession, user_id: UUID) -> MyProfile | None:
     if row is None:
         return None
     return MyProfile(
-        user_id=row.user_id,
-        display_name=row.display_name,
-        username=row.username,
+        **profile_of(row).model_dump(),
         email=row.email,
+        bio=row.bio,
+        city=row.city,
+        preferences=read_preferences(row.preferences),
+        profile_visibility=row.profile_visibility,
+        stats_visibility=row.stats_visibility,
+        searchable=row.searchable,
     )
 
 
@@ -158,10 +183,7 @@ async def profiles_for(session: AsyncSession, user_ids: list[UUID]) -> dict[UUID
     rows = (
         await session.execute(select(users_table).where(users_table.c.user_id.in_(user_ids)))
     ).all()
-    return {
-        r.user_id: UserProfile(user_id=r.user_id, display_name=r.display_name, username=r.username)
-        for r in rows
-    }
+    return {r.user_id: profile_of(r) for r in rows}
 
 
 async def username_taken(
@@ -218,10 +240,9 @@ async def search(session: AsyncSession, query: str, *, exclude: UUID) -> list[Us
             select(users_table).where(
                 or_(users_table.c.email == q, users_table.c.username == q),
                 users_table.c.user_id != exclude,
+                # Opted out of being found (Settings → privacy).
+                users_table.c.searchable.is_(True),
             )
         )
     ).all()
-    return [
-        UserProfile(user_id=r.user_id, display_name=r.display_name, username=r.username)
-        for r in rows
-    ]
+    return [profile_of(r) for r in rows]

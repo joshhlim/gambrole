@@ -49,8 +49,8 @@ export interface MahjongPlayerStats {
   dealer_wins: number;
   dealer_win_rate: number;
   profit_by_kind: Record<string, number>;
-  best_hand_chips: number | null;
-  worst_hand_chips: number | null;
+  best_hand_cents: number | null;
+  worst_hand_cents: number | null;
 }
 
 export interface SessionResult {
@@ -65,7 +65,6 @@ export interface OverviewStats {
   total_cents: number;
   taidi_cents: number;
   mahjong_cents: number;
-  mahjong_chips: number;
   total_sessions: number;
   taidi_sessions: number;
   mahjong_sessions: number;

@@ -42,8 +42,8 @@ export interface MahjongSessionFacts {
   angang_count: number;
   tai_total: number;
   tai_wins: number;
-  best_hand_chips: number | null;
-  worst_hand_chips: number | null;
+  best_hand_cents: number | null;
+  worst_hand_cents: number | null;
 }
 
 export interface SessionFact {

@@ -23,7 +23,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 from taidi_core.models import Member, PlayerStats, RoomStatus, is_replay
 
 # Caps on rule values. Generous for any real table; they exist so a typo
@@ -31,8 +31,12 @@ from taidi_core.models import Member, PlayerStats, RoomStatus, is_replay
 # max_tai large enough to stall the server building the table.
 MAX_TAI = 20
 MAX_TAI_PAYOUT = 1_000_000
-MAX_ACTION_CHIPS = 100_000
-MAX_BASE_CHIPS = 1_000_000
+MAX_ACTION_AMOUNT = 100_000
+
+# Games before amounts became dollars were scored in chips worth $0.50. A
+# stored rule set without `cents_per_unit` is one of those; this is what
+# its amounts are multiplied by (see MahjongRules.cents_per_unit).
+LEGACY_CENTS_PER_CHIP = 50
 
 
 class TaiPayout(BaseModel):
@@ -56,34 +60,45 @@ class TaiPayout(BaseModel):
         return self
 
 
-# "3/6 半" — the first real stakes table this app supports. Money is
-# tracked in chips, not cents; base_chips is a starting stack used only for
-# display (see RoomState docstring below), never part of the settlement math.
+# "3/6 半" — the first real stakes table this app supports, in cents. (It
+# was 4/7/11/20/40 chips at $0.50 a chip; these are the same amounts.)
 _DEFAULT_TAI_TABLE = {
-    1: TaiPayout(hu=4, zimo=4),
-    2: TaiPayout(hu=7, zimo=5),
-    3: TaiPayout(hu=11, zimo=7),
-    4: TaiPayout(hu=20, zimo=12),
-    5: TaiPayout(hu=40, zimo=22),
+    1: TaiPayout(hu=200, zimo=200),
+    2: TaiPayout(hu=350, zimo=250),
+    3: TaiPayout(hu=550, zimo=350),
+    4: TaiPayout(hu=1000, zimo=600),
+    5: TaiPayout(hu=2000, zimo=1100),
 }
 
 
+def _amount(default: int, legacy_name: str) -> Any:
+    # Accepts the pre-dollars field name too, so stored games and older
+    # clients keep validating; always serialised under the new name.
+    name = legacy_name.removesuffix("_chips") + "_amount"
+    return Field(default=default, validation_alias=AliasChoices(name, legacy_name))
+
+
 class MahjongRules(BaseModel):
-    """Everything about how a game is scored. All of it configurable."""
+    """Everything about how a game is scored. All of it configurable.
+
+    Amounts are in units of `cents_per_unit`: 1 for every game created since
+    money became dollars (amounts ARE cents), 50 for older games scored in
+    $0.50 chips. machine.apply multiplies every transfer by it, so state,
+    stats and settlements only ever see cents."""
 
     model_config = ConfigDict(frozen=True)
 
-    base_chips: int = 300
-    yao_chips: int = 2
-    gang_chips: int = 2
+    cents_per_unit: int = 1
+    yao_amount: int = _amount(100, "yao_chips")
+    gang_amount: int = _amount(100, "gang_chips")
     # Optional extra bonuses layered on top of a HU's tai payout, each
     # toggled per-declaration (see machine.declare_hu). zimo_bonus only
     # applies to a self-drawn win; klppdd applies to any win and mirrors
     # whichever payer structure that win already uses (split 3 ways on a
     # zimo, paid in full by the single payer on a direct/bao win). Both
     # default to 0 (off) so existing presets are unaffected.
-    zimo_bonus_chips: int = 0
-    klppdd_chips: int = 0
+    zimo_bonus_amount: int = _amount(0, "zimo_bonus_chips")
+    klppdd_amount: int = _amount(0, "klppdd_chips")
     max_tai: int = 5
     tai_table: dict[int, TaiPayout] = Field(default_factory=lambda: dict(_DEFAULT_TAI_TABLE))
 
@@ -91,17 +106,13 @@ class MahjongRules(BaseModel):
     def _validate(self, info: ValidationInfo) -> MahjongRules:
         if is_replay(info):
             return self
-        values = (
-            self.base_chips,
-            self.yao_chips,
-            self.gang_chips,
-            self.zimo_bonus_chips,
-            self.klppdd_chips,
-        )
+        values = (self.yao_amount, self.gang_amount, self.zimo_bonus_amount, self.klppdd_amount)
         if min(values) < 0:
             raise ValueError("Rule values can't be negative.")
-        if self.base_chips > MAX_BASE_CHIPS or max(values[1:]) > MAX_ACTION_CHIPS:
+        if max(values) > MAX_ACTION_AMOUNT:
             raise ValueError("Rule values are too large.")
+        if not 1 <= self.cents_per_unit <= LEGACY_CENTS_PER_CHIP:
+            raise ValueError(f"cents_per_unit must be between 1 and {LEGACY_CENTS_PER_CHIP}.")
         if not 1 <= self.max_tai <= MAX_TAI:
             raise ValueError(f"max_tai must be between 1 and {MAX_TAI}.")
         if len(self.tai_table) > MAX_TAI or any(not 1 <= t <= MAX_TAI for t in self.tai_table):
@@ -111,17 +122,31 @@ class MahjongRules(BaseModel):
             raise ValueError(f"tai_table is missing entries for tai={missing}.")
         return self
 
+    @classmethod
+    def from_stored(cls, raw: dict[str, Any], **kwargs: Any) -> MahjongRules:
+        """Validate rules that may predate dollars — for stored games and for
+        anything an older client sends. Those always carry the old `*_chips`
+        field names (every stored rule set is a full dump) and never a
+        `cents_per_unit`; anything else is already in cents."""
+        is_chips = "cents_per_unit" not in raw and any(k.endswith("_chips") for k in raw)
+        if is_chips:
+            raw = {"cents_per_unit": LEGACY_CENTS_PER_CHIP, **raw}
+        return cls.model_validate(raw, **kwargs)
+
     def describe(self) -> str:
+        def money(units: int) -> str:
+            return f"${units * self.cents_per_unit / 100:.2f}"
+
         top = self.tai_table[self.max_tai]
         extras = []
-        if self.zimo_bonus_chips:
-            extras.append(f"zimo bonus {self.zimo_bonus_chips}")
-        if self.klppdd_chips:
-            extras.append(f"klppdd {self.klppdd_chips}")
+        if self.zimo_bonus_amount:
+            extras.append(f"zimo bonus {money(self.zimo_bonus_amount)}")
+        if self.klppdd_amount:
+            extras.append(f"klppdd {money(self.klppdd_amount)}")
         extra = f" · {' · '.join(extras)}" if extras else ""
         return (
-            f"base {self.base_chips} chips · yao {self.yao_chips} · gang {self.gang_chips} · "
-            f"up to {self.max_tai} tai (hu {top.hu} / zimo {top.zimo}){extra}"
+            f"yao {money(self.yao_amount)} · gang {money(self.gang_amount)} · "
+            f"up to {self.max_tai} tai (hu {money(top.hu)} / zimo {money(top.zimo)}){extra}"
         )
 
 
@@ -184,9 +209,7 @@ class HandState(BaseModel):
 
 class RoomState(BaseModel):
     """The full, derivable state of one room. Rebuilt by folding events through
-    machine.apply(). `balances` is always net (can go negative) — a player's
-    displayed chip stack is `rules.base_chips + balances[player_id]`, computed
-    by the caller, not stored here."""
+    machine.apply(). `balances` is always net cents (can go negative)."""
 
     room_id: UUID
     status: RoomStatus = RoomStatus.LOBBY
@@ -259,9 +282,8 @@ class MahjongPlayerStats(BaseModel):
     hands_played; an open (in-progress) hand contributes nothing.
     "Dealer hands" uses the player's `Member.seat` (immutable once a game
     starts) against each hand's `dealer_seat` — no separate enrichment
-    needed. `profit_by_kind` is chip-denominated, summed straight from
-    existing `Transfer.kind` entries (no $-equivalent here — that
-    conversion is a display-layer concern, not core domain logic)."""
+    needed. `profit_by_kind` is in cents, summed straight from existing
+    `Transfer.kind` entries."""
 
     player_id: UUID
     display_name: str
@@ -283,8 +305,8 @@ class MahjongPlayerStats(BaseModel):
 
     profit_by_kind: dict[str, int] = Field(default_factory=dict)
 
-    best_hand_chips: int | None = None
-    worst_hand_chips: int | None = None
+    best_hand_cents: int | None = None
+    worst_hand_cents: int | None = None
 
 
 class MahjongSessionFacts(BaseModel):
@@ -314,5 +336,5 @@ class MahjongSessionFacts(BaseModel):
     # set of sessions.
     tai_total: int = 0
     tai_wins: int = 0
-    best_hand_chips: int | None = None
-    worst_hand_chips: int | None = None
+    best_hand_cents: int | None = None
+    worst_hand_cents: int | None = None

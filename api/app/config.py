@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # committed anywhere, so a local-mode deploy can't be signed into by
     # anyone who has read this repo. main.py refuses to start without it.
     local_jwt_secret: str | None = None
+    # Signs profile-photo URLs (profile_service.avatar_url). Optional: a
+    # random per-process key is used otherwise, which only means photo URLs
+    # change when the API restarts.
+    asset_secret: str | None = None
     access_token_ttl_minutes: int = 60 * 24 * 7  # a week — fine for a party-game app
 
     # Supabase projects sign tokens one of two ways, and a project only ever

@@ -20,6 +20,7 @@ from ..debts_service import (
     build_debts_for,
     mark_paid,
     reject,
+    settle,
 )
 
 router = APIRouter(prefix="/debts", tags=["debts"])
@@ -86,6 +87,25 @@ async def reject_route(
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "Only the person owed this debt can reject it."
         ) from e
+    except SettlementInvalidTransition as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
+    return result.model_dump(mode="json")
+
+
+@router.post("/{settlement_id}/settle")
+async def settle_route(
+    settlement_id: UUID,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """One-step close for a debt with a guest who has no account — see
+    debts_service.settle."""
+    try:
+        result = await settle(session, settlement_id, user.user_id)
+    except SettlementNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Debt not found.") from e
+    except SettlementForbidden as e:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This isn't your debt.") from e
     except SettlementInvalidTransition as e:
         raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
     return result.model_dump(mode="json")

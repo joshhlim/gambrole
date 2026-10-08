@@ -77,6 +77,8 @@ export interface TaidiRoomState {
   created_at: string;
   ended_at: string | null;
   invite_code: string;
+  /** The group this game counts towards, or null for a one-off. */
+  group_id: string | null;
 }
 
 /** Every room the state endpoint can return, discriminated on game_type —

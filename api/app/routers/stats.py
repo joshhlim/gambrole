@@ -9,10 +9,12 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import CurrentUser, get_current_user
 from ..db import get_session
+from ..db import users as users_table
 from ..friends_service import friend_ids
 from ..stats_facts_service import build_facts_for
 from ..stats_service import build_stats_for
@@ -56,5 +58,16 @@ async def get_friend_facts(
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "You can only see the stats of people you're friends with."
         )
+    # Friends see your stats unless you've turned that off (Settings → privacy).
+    if player_id != user.user_id:
+        hidden = (
+            await session.execute(
+                select(users_table.c.user_id).where(
+                    users_table.c.user_id == player_id, users_table.c.stats_visibility == "nobody"
+                )
+            )
+        ).first()
+        if hidden is not None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "These stats are private.")
     facts = await build_facts_for(session, player_id)
     return facts.model_dump(mode="json")

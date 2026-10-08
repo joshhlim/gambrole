@@ -12,25 +12,54 @@ test("the 5/1 半 preset fills in its stakes table", async ({ page }) => {
 
   await page.getByTestId("mahjong-preset-5/1-半").click();
 
-  await expect(page.getByTestId("rule-base")).toHaveValue("500");
-  await expect(page.getByTestId("rule-yao")).toHaveValue("3");
-  await expect(page.getByTestId("rule-gang")).toHaveValue("3");
-  await expect(page.getByTestId("rule-zimo-bonus")).toHaveValue("5");
-  await expect(page.getByTestId("rule-klppdd")).toHaveValue("5");
-  await expect(page.getByTestId("rule-tai-1-hu")).toHaveValue("4");
-  await expect(page.getByTestId("rule-tai-1-zimo")).toHaveValue("2");
-  await expect(page.getByTestId("rule-tai-7-hu")).toHaveValue("256");
-  await expect(page.getByTestId("rule-tai-7-zimo")).toHaveValue("128");
+  // Dollars, not chips — and no starting stack to set.
+  await expect(page.getByTestId("rule-base")).toHaveCount(0);
+  await expect(page.getByTestId("rule-yao")).toHaveValue("1.50");
+  await expect(page.getByTestId("rule-gang")).toHaveValue("1.50");
+  await expect(page.getByTestId("rule-zimo-bonus")).toHaveValue("2.50");
+  await expect(page.getByTestId("rule-klppdd")).toHaveValue("2.50");
+  await expect(page.getByTestId("rule-tai-1-hu")).toHaveValue("2.00");
+  await expect(page.getByTestId("rule-tai-1-zimo")).toHaveValue("1.00");
+  await expect(page.getByTestId("rule-tai-7-hu")).toHaveValue("128.00");
+  await expect(page.getByTestId("rule-tai-7-zimo")).toHaveValue("64.00");
   await expect(page.getByTestId("tai-row-add")).toBeVisible();
 
-  // Out-of-range or non-integer values keep Create disabled.
+  // Negative, sub-cent or over-the-cap amounts keep Create disabled.
   await page.getByTestId("rule-yao").fill("-2");
   await expect(page.getByTestId("create-room-btn")).toBeDisabled();
-  await page.getByTestId("rule-yao").fill("3");
-  await page.getByTestId("rule-tai-2-hu").fill("2.5");
+  await page.getByTestId("rule-yao").fill("1000.01");
   await expect(page.getByTestId("create-room-btn")).toBeDisabled();
-  await page.getByTestId("rule-tai-2-hu").fill("8");
+  await page.getByTestId("rule-yao").fill("1.5");
+  await page.getByTestId("rule-tai-2-hu").fill("2.555");
+  await expect(page.getByTestId("create-room-btn")).toBeDisabled();
+  await page.getByTestId("rule-tai-2-hu").fill("10000.01");
+  await expect(page.getByTestId("create-room-btn")).toBeDisabled();
+  await page.getByTestId("rule-tai-2-hu").fill("4");
   await expect(page.getByTestId("create-room-btn")).toBeEnabled();
+});
+
+test("an API that predates dollars gets its room disbanded, not played", async ({ page }) => {
+  await login(page, `OldApi-${Date.now().toString(36)}`);
+  await openNewRoom(page, "mahjong");
+
+  // Stand in for the old API: same room, but its rules echo back without
+  // cents_per_unit.
+  const isCreate = (url: URL) => url.pathname === "/rooms";
+  await page.route(isCreate, async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    const res = await route.fetch();
+    const body = await res.json();
+    delete body.draft_rules.cents_per_unit;
+    await route.fulfill({ response: res, json: body });
+  });
+  await page.getByTestId("create-room-btn").click();
+  await expect(page.getByText("Update in progress — try again in a minute.")).toBeVisible();
+  await expect(page).toHaveURL(/\/new/);
+
+  // The room really is gone: one active room per player, so a second
+  // create would be refused if it weren't.
+  await page.unroute(isCreate);
+  await submitNewRoom(page);
 });
 
 test("a full hand across four simulated devices", async ({ browser }) => {
@@ -40,7 +69,7 @@ test("a full hand across four simulated devices", async ({ browser }) => {
   try {
     await openNewRoom(alice, "mahjong");
     const inviteCode = await submitNewRoom(alice);
-    await expect(alice.getByTestId("rules-summary")).toContainText("base 300");
+    await expect(alice.getByTestId("rules-summary")).toContainText("yao $1.00");
 
     for (const p of [bob, cara, dan]) await joinByCode(p, inviteCode);
     for (const p of [alice, bob, cara, dan]) {
@@ -55,32 +84,32 @@ test("a full hand across four simulated devices", async ({ browser }) => {
       await expect(p.getByTestId("dealer-seat")).toHaveAttribute("data-wind", "1");
     }
 
-    // Alice YAOs herself (咬自己): each of the other 3 pays 2 chips. Displayed
-    // amounts are chip stacks (base 300 + net), not raw dollars.
+    // Alice YAOs herself (咬自己): each of the other 3 pays $1.00. Displayed
+    // amounts are net balances, like Taidi.
     await alice.getByTestId("yao-btn").click();
     await alice.getByTestId("pick-seat-0").click();
     await alice.getByTestId("yao-ming-btn").click();
     for (const p of [alice, bob, cara, dan]) {
-      await expect(amountFor(p, "Alice")).toHaveText("306", { timeout: 10_000 }); // 300 + 3*2
+      await expect(amountFor(p, "Alice")).toHaveText("$3.00", { timeout: 10_000 }); // 3 * $1
     }
 
     // Bob declares ANGANG — double-tapped, which must still charge once:
-    // each of the other 3 pays gang_chips*2=4. Bob already paid 2 into
-    // Alice's YAO, so his net is -2+12=10.
+    // each of the other 3 pays gang*2 = $2. Bob already paid $1 into
+    // Alice's YAO, so his net is -1 + 3*2 = $5.
     await bob.getByTestId("gang-btn").click();
     await bob.getByTestId("pick-angang").dblclick();
     for (const p of [alice, bob, cara, dan]) {
-      await expect(amountFor(p, "Bob")).toHaveText("310", { timeout: 10_000 }); // 300 - 2 + 3*4
+      await expect(amountFor(p, "Bob")).toHaveText("$5.00", { timeout: 10_000 }); // -1 + 3*2
     }
 
     // Cara gangs off Dan (seat 3) — in GangFlow the seat tap *is* the
     // submit, so this double-tap is the one that used to charge twice.
-    // Dan alone pays gang_chips*3 = 6.
+    // Dan alone pays gang*3 = $3.
     await cara.getByTestId("gang-btn").click();
     await cara.getByTestId("pick-seat-3").dblclick();
     for (const p of [alice, bob, cara, dan]) {
-      await expect(amountFor(p, "Cara")).toHaveText("300", { timeout: 10_000 }); // 300 - 2 - 4 + 6
-      await expect(amountFor(p, "Dan")).toHaveText("288", { timeout: 10_000 }); // 300 - 2 - 4 - 6
+      await expect(amountFor(p, "Cara")).toHaveText("$0.00", { timeout: 10_000 }); // -1 - 2 + 3
+      await expect(amountFor(p, "Dan")).toHaveText("-$6.00", { timeout: 10_000 }); // -1 - 2 - 3
     }
 
     // Dan directly HUs off Cara (seat 2) at 2 tai — closes the hand. Dan
@@ -98,9 +127,9 @@ test("a full hand across four simulated devices", async ({ browser }) => {
       // Back to the action buttons for hand 2 on every device.
       await expect(p.getByTestId("yao-btn")).toBeVisible({ timeout: 10_000 });
     }
-    // 3/6 半 at 2 tai: hu = 7.
-    await expect(amountFor(alice, "Dan")).toHaveText("295"); // 288 + 7
-    await expect(amountFor(alice, "Cara")).toHaveText("293"); // 300 - 7
+    // 3/6 半 at 2 tai: hu = $3.50.
+    await expect(amountFor(alice, "Dan")).toHaveText("-$2.50"); // -6 + 3.50
+    await expect(amountFor(alice, "Cara")).toHaveText("-$3.50"); // 0 - 3.50
     await expect(
       alice.locator('[data-testid="standing-row"][data-player^="Bob"]'),
     ).toHaveAttribute("data-dealer", "true");
@@ -138,10 +167,10 @@ test("zimo bonus and KLPPDD toggles add on top of the tai payout", async ({ brow
   try {
     // Both bonuses set on the form, and sent with the create call.
     await openNewRoom(alice, "mahjong");
-    await alice.getByTestId("rule-zimo-bonus").fill("5");
-    await alice.getByTestId("rule-klppdd").fill("10");
+    await alice.getByTestId("rule-zimo-bonus").fill("2.50");
+    await alice.getByTestId("rule-klppdd").fill("5");
     const inviteCode = await submitNewRoom(alice);
-    await expect(alice.getByTestId("rules-summary")).toContainText("klppdd 10");
+    await expect(alice.getByTestId("rules-summary")).toContainText("klppdd $5.00");
 
     for (const p of [bob, cara, dan]) await joinByCode(p, inviteCode);
     for (const p of [alice, bob, cara, dan]) {
@@ -153,17 +182,17 @@ test("zimo bonus and KLPPDD toggles add on top of the tai payout", async ({ brow
       await expect(p.getByTestId("yao-btn")).toBeVisible({ timeout: 10_000 });
     }
 
-    // Alice self-draws at 1 tai (default table: hu=4/zimo=4) with the zimo
-    // bonus (5) and KLPPDD (10) both on: each of the other 3 pays
-    // 4 + 5 + 10 = 19.
+    // Alice self-draws at 1 tai (default table: hu=$2/zimo=$2) with the zimo
+    // bonus ($2.50) and KLPPDD ($5) both on: each of the other 3 pays
+    // 2 + 2.50 + 5 = $9.50.
     await alice.getByTestId("hu-btn").click();
     await alice.getByTestId("pick-seat-0").click();
     await alice.getByTestId("zimo-bonus-toggle").click();
     await alice.getByTestId("klppdd-toggle").click();
     await alice.getByTestId("confirm-hu-btn").click();
     for (const p of [alice, bob, cara, dan]) {
-      await expect(amountFor(p, "Alice")).toHaveText("357", { timeout: 10_000 }); // 300 + 3*19
-      await expect(amountFor(p, "Bob")).toHaveText("281", { timeout: 10_000 }); // 300 - 19
+      await expect(amountFor(p, "Alice")).toHaveText("$28.50", { timeout: 10_000 }); // 3 * 9.50
+      await expect(amountFor(p, "Bob")).toHaveText("-$9.50", { timeout: 10_000 });
     }
 
     // Cara's phone loses the server for a while: it keeps showing hand 2,
@@ -172,15 +201,15 @@ test("zimo bonus and KLPPDD toggles add on top of the tai payout", async ({ brow
     await expect(cara.getByTestId("reconnecting")).toBeVisible({ timeout: 10_000 });
 
     // Meanwhile Bob directly HUs off Cara (seat 2) at 1 tai with KLPPDD on
-    // (no zimo bonus option for a direct win): Cara alone pays 4 + 3*10 = 34.
+    // (no zimo bonus option for a direct win): Cara alone pays 2 + 3*5 = $17.
     await bob.getByTestId("hu-btn").click();
     await bob.getByTestId("pick-seat-2").click();
     await expect(bob.getByTestId("zimo-bonus-toggle")).toHaveCount(0);
     await bob.getByTestId("klppdd-toggle").click();
     await bob.getByTestId("confirm-hu-btn").click();
     for (const p of [alice, bob, dan]) {
-      await expect(amountFor(p, "Bob")).toHaveText("315", { timeout: 10_000 }); // 281 + 34
-      await expect(amountFor(p, "Cara")).toHaveText("247", { timeout: 10_000 }); // 281 - 34
+      await expect(amountFor(p, "Bob")).toHaveText("$7.50", { timeout: 10_000 }); // -9.50 + 17
+      await expect(amountFor(p, "Cara")).toHaveText("-$26.50", { timeout: 10_000 }); // -9.50 - 17
       await expect(p.getByTestId("dealer-seat")).toHaveAttribute("data-hand", "3");
     }
 
@@ -197,8 +226,8 @@ test("zimo bonus and KLPPDD toggles add on top of the tai payout", async ({ brow
     await expect(cara.getByTestId("dealer-seat")).toHaveAttribute("data-hand", "3");
     await cara.unroute("**/rooms/*/state");
     for (const p of [alice, bob, cara, dan]) {
-      await expect(amountFor(p, "Cara")).toHaveText("247", { timeout: 10_000 }); // no YAO landed
-      await expect(amountFor(p, "Bob")).toHaveText("315");
+      await expect(amountFor(p, "Cara")).toHaveText("-$26.50", { timeout: 10_000 }); // no YAO landed
+      await expect(amountFor(p, "Bob")).toHaveText("$7.50");
     }
     await expect(cara.getByTestId("reconnecting")).toHaveCount(0, { timeout: 20_000 });
   } finally {

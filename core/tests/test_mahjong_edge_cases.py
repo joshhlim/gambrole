@@ -123,8 +123,8 @@ class TestValidation:
         "kwargs",
         [
             {"max_tai": 21, "tai_table": {t: TaiPayout(hu=1, zimo=1) for t in range(1, 22)}},
-            {"yao_chips": 100_001},
-            {"base_chips": -1},
+            {"yao_amount": 100_001},
+            {"cents_per_unit": 0},
         ],
     )
     def test_rules_out_of_range_are_rejected(self, kwargs):
@@ -169,3 +169,30 @@ def test_a_game_started_under_looser_rules_still_replays(now):
     old_style = events[0].model_copy(update={"payload": {"rules": rules}})
     replayed = machine.fold(state, [old_style])
     assert replayed.rules is not None and replayed.rules.tai_table[1].hu == 5_000_000
+
+
+def test_a_game_scored_in_chips_replays_in_cents(now):
+    """Games from before dollars stored chip amounts and no cents_per_unit;
+    folding them must give the same money in cents ($0.50 a chip)."""
+    state = _lobby(now)
+    [start] = machine.start_game(
+        state, expected_seq=state.seq, actor=A, rules=MahjongRules(), now=now
+    )
+    chip_rules = {
+        "base_chips": 300,
+        "yao_chips": 2,
+        "gang_chips": 2,
+        "max_tai": 1,
+        "tai_table": {"1": {"hu": 4, "zimo": 4}},
+    }
+    state = machine.fold(state, [start.model_copy(update={"payload": {"rules": chip_rules}})])
+    assert state.rules is not None and state.rules.cents_per_unit == 50
+    # Commands still compute in the game's own units (chips here)...
+    events = machine.declare_yao(
+        state, expected_seq=state.seq, actor=B, target_seat=0, an=False, now=now
+    )
+    assert events[0].payload["transfers"][0]["amount_cents"] == 2
+    # ...and folding turns them into cents.
+    state = machine.fold(state, events)
+    assert state.balances[B] == 100 and state.balances[A] == -100
+    assert state.hands[0].transfers[0].amount_cents == 100

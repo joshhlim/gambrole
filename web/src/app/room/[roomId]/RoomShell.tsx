@@ -1,8 +1,15 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { groupsApi } from "@/lib/groupsApi";
+import type { UserProfile } from "@/lib/friendsTypes";
+import { profileHref } from "@/lib/profileApi";
+import { useProfiles } from "@/lib/useProfiles";
+import type { AnyRoomState } from "@/lib/types";
+import Avatar from "@/components/Avatar";
 import type { RoomProblemKind } from "./useRoom";
 
 /** Full-screen stand-in for a room that can't be shown at all. */
@@ -17,7 +24,7 @@ export function RoomProblem({ kind }: { kind: Exclude<RoomProblemKind, "offline"
         <button
           onClick={() => router.push("/")}
           data-testid="room-problem-home-btn"
-          className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white"
+          className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary"
         >
           Home
         </button>
@@ -34,6 +41,38 @@ export function RoomLoading({ offline }: { offline?: boolean }) {
   );
 }
 
+// Group names by id, for the room header. A room's group never changes, so
+// one lookup per group per page load is plenty — polling must not refetch.
+const groupNames = new Map<string, string | null>();
+
+/** The name of the group a room belongs to, or null when you aren't in it
+ * (a friend-of-a-friend at the table) — then there's just no label. */
+function useGroupName(groupId: string | null | undefined): string | null {
+  const [name, setName] = useState<{ id: string; name: string | null } | null>(null);
+  useEffect(() => {
+    if (!groupId || groupNames.has(groupId)) return;
+    let cancelled = false;
+    // The list rather than the group itself: it's what a non-member can ask
+    // for without a 403, and it skips the leaderboard query.
+    groupsApi
+      .list()
+      .then(({ groups }) => {
+        for (const g of groups) groupNames.set(g.group_id, g.name);
+        if (!groupNames.has(groupId)) groupNames.set(groupId, null);
+        if (!cancelled) setName({ id: groupId, name: groupNames.get(groupId) ?? null });
+      })
+      .catch(() => {
+        /* a missing label isn't worth an error */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [groupId]);
+  if (!groupId) return null;
+  if (groupNames.has(groupId)) return groupNames.get(groupId) ?? null;
+  return name?.id === groupId ? name.name : null;
+}
+
 /**
  * The frame both room screens share: a back arrow that only ever
  * minimises (you stay in the room; home's "Rejoin Room" is the way back),
@@ -46,15 +85,18 @@ export function RoomFrame({
   offline,
   banner,
   blockedBy,
+  groupId,
   children,
 }: {
   offline: boolean;
   banner: string | null;
   blockedBy: string | null;
+  groupId?: string | null;
   children: ReactNode;
 }) {
   const router = useRouter();
   const [going, setGoing] = useState(false);
+  const groupName = useGroupName(groupId);
 
   // The refusal only names the other room, not its game — ask which one it
   // is, so the link lands on the right screen without a lookup detour.
@@ -77,6 +119,15 @@ export function RoomFrame({
         >
           ←
         </button>
+        {groupName && (
+          <Link
+            href={`/groups/${groupId}`}
+            data-testid="room-group-name"
+            className="min-w-0 flex-1 truncate text-center text-xs font-semibold uppercase tracking-widest text-muted"
+          >
+            {groupName}
+          </Link>
+        )}
         {offline && (
           <span
             data-testid="reconnecting"
@@ -86,6 +137,8 @@ export function RoomFrame({
             Reconnecting…
           </span>
         )}
+        {/* Balances the back arrow so the group name sits centred. */}
+        {groupName && !offline && <span aria-hidden className="w-11 shrink-0" />}
       </div>
 
       {banner && (
@@ -100,7 +153,7 @@ export function RoomFrame({
               onClick={goToActive}
               disabled={going}
               data-testid="go-to-active-room-btn"
-              className="mt-2 w-full rounded-lg bg-brand-strong py-2 text-xs font-semibold text-white disabled:opacity-50"
+              className="mt-2 w-full rounded-lg bg-primary-strong py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
             >
               Go to your game
             </button>
@@ -125,64 +178,54 @@ export function RulesLine({ text }: { text: string | null }) {
 }
 
 /**
- * A button that asks before it acts — for anything that settles money or
- * can't be taken back. The confirm step replaces the button in place, so
- * the layout doesn't jump and a second stray tap lands on "Cancel"'s side
- * of the row rather than repeating the action.
+ * Photos and accents for everyone with an account at this table, current
+ * or departed. Fetched once per player per page load (see useProfiles) —
+ * never per poll.
  */
-export function ConfirmAction({
-  label,
-  prompt,
-  confirmLabel,
-  testIds,
-  busy,
-  onConfirm,
-  buttonClassName,
+export function useRoomProfiles(state: AnyRoomState | null): Record<string, UserProfile> {
+  const ids = state
+    ? [...Object.keys(state.members), ...Object.keys(state.balances)].filter(
+        (id) => !state.members[id]?.is_guest,
+      )
+    : [];
+  return useProfiles(ids);
+}
+
+/** Avatar and name, in a row. `link` makes it open their profile — used
+ * where a tap can't be mistaken for a game action (lobby, final results). */
+export function PlayerLabel({
+  playerId,
+  name,
+  profile,
+  link = false,
+  size = 28,
 }: {
-  label: ReactNode;
-  prompt: string;
-  confirmLabel: string;
-  testIds: { open: string; confirm: string; cancel: string };
-  busy: boolean;
-  onConfirm: () => void;
-  buttonClassName: string;
+  playerId: string;
+  name: string;
+  profile?: UserProfile;
+  link?: boolean;
+  size?: number;
 }) {
-  const [asking, setAsking] = useState(false);
-  if (!asking) {
+  const inner = (
+    <>
+      <Avatar name={name} url={profile?.avatar_url} accent={profile?.accent} size={size} />
+      <span className="min-w-0 truncate font-medium">{name}</span>
+    </>
+  );
+  if (link && profile) {
     return (
-      <button
-        onClick={() => setAsking(true)}
-        disabled={busy}
-        data-testid={testIds.open}
-        className={buttonClassName}
+      <Link
+        href={profileHref({ user_id: playerId, username: profile.username })}
+        data-testid="player-profile-link"
+        className="flex min-w-0 items-center gap-2.5"
       >
-        {label}
-      </button>
+        {inner}
+      </Link>
     );
   }
-  return (
-    <div className="space-y-2 rounded-xl border border-border bg-surface px-3 py-2.5">
-      <p className="text-center text-xs text-muted">{prompt}</p>
-      <div className="flex gap-2">
-        <button
-          onClick={() => {
-            setAsking(false);
-            onConfirm();
-          }}
-          disabled={busy}
-          data-testid={testIds.confirm}
-          className="flex-1 rounded-lg bg-danger py-2.5 text-xs font-semibold text-white disabled:opacity-50"
-        >
-          {confirmLabel}
-        </button>
-        <button
-          onClick={() => setAsking(false)}
-          data-testid={testIds.cancel}
-          className="flex-1 rounded-lg border border-border py-2.5 text-xs font-semibold text-muted"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
+  return <span className="flex min-w-0 items-center gap-2.5">{inner}</span>;
 }
+
+// Shared well beyond the room screens now (debts, groups); re-exported so
+// the room code keeps importing it from here.
+export { ConfirmAction } from "@/components/ConfirmAction";

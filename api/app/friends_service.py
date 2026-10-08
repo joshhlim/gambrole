@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel
@@ -16,6 +16,7 @@ from .db import friendships as friendships_table
 from .db import room_participants as room_participants_table
 from .db import rooms as rooms_table
 from .db import users as users_table
+from .identity import identity_ids
 from .time import utcnow
 from .users_service import UserProfile, profiles_for
 
@@ -56,6 +57,33 @@ async def _edges_for(session: AsyncSession, player_id: UUID) -> Sequence[Row[Any
             )
         )
     ).all()
+
+
+async def relationship(
+    session: AsyncSession, viewer: UUID, other: UUID
+) -> Literal["friends", "pending_out", "pending_in", "none"]:
+    """How `viewer` stands with `other`, for a profile page's button."""
+    row = (
+        await session.execute(
+            select(friendships_table).where(
+                or_(
+                    and_(
+                        friendships_table.c.requester_id == viewer,
+                        friendships_table.c.addressee_id == other,
+                    ),
+                    and_(
+                        friendships_table.c.requester_id == other,
+                        friendships_table.c.addressee_id == viewer,
+                    ),
+                )
+            )
+        )
+    ).first()
+    if row is None:
+        return "none"
+    if row.status == "accepted":
+        return "friends"
+    return "pending_out" if row.requester_id == viewer else "pending_in"
 
 
 async def build_friends_for(session: AsyncSession, player_id: UUID) -> FriendsResponse:
@@ -233,13 +261,15 @@ async def played_with(session: AsyncSession, player_id: UUID) -> list[UserProfil
     """People you've shared a room with who aren't friends (or pending) yet —
     the "add them from a game you played" path, which needs no lookup at all.
     """
-    # Every room you've been in, as host or joiner.
+    # Every room you've been in, as host or joiner — including as a guest
+    # you've since claimed (identity.py).
+    ids = await identity_ids(session, player_id)
     mine = (
         select(rooms_table.c.room_id)
         .where(rooms_table.c.host_id == player_id)
         .union(
             select(room_participants_table.c.room_id).where(
-                room_participants_table.c.player_id == player_id
+                room_participants_table.c.player_id.in_(ids)
             )
         )
     )
@@ -252,7 +282,7 @@ async def played_with(session: AsyncSession, player_id: UUID) -> list[UserProfil
         room_participants_table.c.room_id.in_(my_rooms)
     )
     others = {
-        r.pid for r in (await session.execute(hosts.union(joiners))).all() if r.pid != player_id
+        r.pid for r in (await session.execute(hosts.union(joiners))).all() if r.pid not in ids
     }
     if not others:
         return []

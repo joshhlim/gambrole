@@ -12,16 +12,13 @@ from datetime import datetime
 from typing import Any, Literal, cast
 from uuid import UUID
 
-from mahjong_core.models import RoomState as MahjongRoomState
 from pydantic import BaseModel
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import events as events_table
 from .db import settlements as settlements_table
-from .events_store import rebuild_many
-from .money import MAHJONG_CHIP_VALUE_CENTS
-from .stats_service import ended_room_refs
+from .stats_service import load_ended_rooms
 
 
 class HistoryEntry(BaseModel):
@@ -47,7 +44,7 @@ class HistoryResponse(BaseModel):
 
 
 async def build_history_for(session: AsyncSession, player_id: UUID) -> HistoryResponse:
-    room_refs = await ended_room_refs(session, player_id)
+    ids, room_refs, states = await load_ended_rooms(session, player_id)
     if not room_refs:
         return HistoryResponse(games=[])
 
@@ -58,8 +55,8 @@ async def build_history_for(session: AsyncSession, player_id: UUID) -> HistoryRe
             select(settlements_table).where(
                 settlements_table.c.room_id.in_(room_ids),
                 or_(
-                    settlements_table.c.from_player == player_id,
-                    settlements_table.c.to_player == player_id,
+                    settlements_table.c.from_player.in_(ids),
+                    settlements_table.c.to_player.in_(ids),
                 ),
             )
         )
@@ -80,15 +77,10 @@ async def build_history_for(session: AsyncSession, player_id: UUID) -> HistoryRe
     ).all()
     end_by_room = {row.room_id: row for row in end_rows}
 
-    states = await rebuild_many(session, room_ids)
-
     entries: list[HistoryEntry] = []
     for room_id, game_type in room_refs:
         state = states[room_id]
-        if isinstance(state, MahjongRoomState):
-            net_cents = state.balances.get(player_id, 0) * MAHJONG_CHIP_VALUE_CENTS
-        else:
-            net_cents = state.balances.get(player_id, 0)
+        net_cents = state.balances.get(player_id, 0)
 
         # room_participants remembers everyone who EVER joined (ADR-0007),
         # so it also matches people who ducked into the lobby and left
@@ -100,9 +92,7 @@ async def build_history_for(session: AsyncSession, player_id: UUID) -> HistoryRe
 
         rows = by_room.get(room_id, [])
         pending = sum(1 for r in rows if r.status in ("pending", "marked_paid"))
-        needs_my_approval = sum(
-            1 for r in rows if r.status == "marked_paid" and r.to_player == player_id
-        )
+        needs_my_approval = sum(1 for r in rows if r.status == "marked_paid" and r.to_player in ids)
         end_row = end_by_room.get(room_id)
         auto_ended = bool(end_row is not None and (end_row.payload or {}).get("reason") == "stale")
         ended_by: str | None = None

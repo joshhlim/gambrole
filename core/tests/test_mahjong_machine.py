@@ -150,7 +150,7 @@ class TestLobby:
 
 class TestYao:
     def test_self_select_charges_each_other_player(self, now):
-        state = _started_room(now, MahjongRules(yao_chips=2))
+        state = _started_room(now, MahjongRules(yao_amount=2))
         state = machine.fold(
             state,
             machine.declare_yao(
@@ -161,7 +161,7 @@ class TestYao:
         assert state.balances[B] == state.balances[C] == state.balances[D] == -2
 
     def test_self_select_an_doubles(self, now):
-        state = _started_room(now, MahjongRules(yao_chips=2))
+        state = _started_room(now, MahjongRules(yao_amount=2))
         state = machine.fold(
             state,
             machine.declare_yao(
@@ -172,7 +172,7 @@ class TestYao:
         assert state.balances[B] == -4
 
     def test_other_select_charges_only_target(self, now):
-        state = _started_room(now, MahjongRules(yao_chips=2))
+        state = _started_room(now, MahjongRules(yao_amount=2))
         state = machine.fold(
             state,
             machine.declare_yao(
@@ -198,7 +198,7 @@ class TestYao:
 
 class TestGang:
     def test_self_select_charges_each_other_player_once(self, now):
-        state = _started_room(now, MahjongRules(gang_chips=2))
+        state = _started_room(now, MahjongRules(gang_amount=2))
         state = machine.fold(
             state, machine.declare_gang(state, expected_seq=state.seq, actor=A, target=0, now=now)
         )
@@ -207,7 +207,7 @@ class TestGang:
         assert state.hands[0].had_gang
 
     def test_other_select_charges_target_triple(self, now):
-        state = _started_room(now, MahjongRules(gang_chips=2))
+        state = _started_room(now, MahjongRules(gang_amount=2))
         state = machine.fold(
             state, machine.declare_gang(state, expected_seq=state.seq, actor=A, target=1, now=now)
         )
@@ -216,7 +216,7 @@ class TestGang:
         assert state.balances[C] == 0
 
     def test_angang_charges_each_other_player_double(self, now):
-        state = _started_room(now, MahjongRules(gang_chips=2))
+        state = _started_room(now, MahjongRules(gang_amount=2))
         state = machine.fold(
             state,
             machine.declare_gang(state, expected_seq=state.seq, actor=A, target="angang", now=now),
@@ -225,7 +225,7 @@ class TestGang:
         assert state.balances[B] == state.balances[C] == state.balances[D] == -4
 
     def test_multiple_gangs_in_one_hand(self, now):
-        state = _started_room(now, MahjongRules(gang_chips=2))
+        state = _started_room(now, MahjongRules(gang_amount=2))
         state = machine.fold(
             state, machine.declare_gang(state, expected_seq=state.seq, actor=A, target=1, now=now)
         )
@@ -297,7 +297,7 @@ class TestHu:
         assert state.hands[0].klppdd is False
 
     def test_hu_records_zimo_bonus_and_klppdd_flags(self, now):
-        state = _started_room(now, _tai_rules(zimo_bonus_chips=5, klppdd_chips=10))
+        state = _started_room(now, _tai_rules(zimo_bonus_amount=5, klppdd_amount=10))
         state = machine.fold(
             state,
             machine.declare_hu(
@@ -352,7 +352,7 @@ class TestHu:
             )
 
     def test_zimo_bonus_adds_flat_amount_from_each_other_player(self, now):
-        state = _started_room(now, _tai_rules(zimo_bonus_chips=5))
+        state = _started_room(now, _tai_rules(zimo_bonus_amount=5))
         state = machine.fold(
             state,
             machine.declare_hu(
@@ -371,7 +371,7 @@ class TestHu:
         assert state.balances[B] == state.balances[C] == state.balances[D] == -105
 
     def test_zimo_bonus_rejected_on_direct_or_bao(self, now):
-        state = _started_room(now, _tai_rules(zimo_bonus_chips=5))
+        state = _started_room(now, _tai_rules(zimo_bonus_amount=5))
         with pytest.raises(IllegalTransition):
             machine.declare_hu(
                 state,
@@ -396,7 +396,7 @@ class TestHu:
             )
 
     def test_klppdd_splits_three_ways_on_zimo(self, now):
-        state = _started_room(now, _tai_rules(klppdd_chips=10))
+        state = _started_room(now, _tai_rules(klppdd_amount=10))
         state = machine.fold(
             state,
             machine.declare_hu(
@@ -415,7 +415,7 @@ class TestHu:
         assert state.balances[B] == state.balances[C] == state.balances[D] == -60
 
     def test_klppdd_single_payer_covers_everyone_on_direct_win(self, now):
-        state = _started_room(now, _tai_rules(klppdd_chips=10))
+        state = _started_room(now, _tai_rules(klppdd_amount=10))
         state = machine.fold(
             state,
             machine.declare_hu(
@@ -436,7 +436,7 @@ class TestHu:
         assert state.balances[D] == 0
 
     def test_klppdd_stacks_with_bao(self, now):
-        state = _started_room(now, _tai_rules(klppdd_chips=10))
+        state = _started_room(now, _tai_rules(klppdd_amount=10))
         state = machine.fold(
             state,
             machine.declare_hu(

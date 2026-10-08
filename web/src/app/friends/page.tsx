@@ -10,6 +10,10 @@ import type {
   MyProfile,
   UserProfile,
 } from "@/lib/friendsTypes";
+import Link from "next/link";
+import { profileHref } from "@/lib/profileApi";
+import Avatar from "@/components/Avatar";
+import { RowsSkeleton } from "@/components/Skeleton";
 import TabTransition from "@/components/TabTransition";
 import TabBar from "@/components/TabBar";
 
@@ -36,23 +40,32 @@ function PersonRow({
       data-testid={testId}
       className="flex items-center gap-3 rounded-xl border border-border bg-surface px-3 py-2.5"
     >
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-foreground">
-          {user.display_name}
-        </p>
-        <p className="truncate text-xs text-muted">
-          {sub ?? handle(user) ?? "no username yet"}
-        </p>
-      </div>
+      {/* The person half of the row opens their profile; the buttons on
+          the right stay separate targets. */}
+      <Link
+        href={profileHref(user)}
+        data-testid="person-link"
+        className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-lg"
+      >
+        <Avatar name={user.display_name} url={user.avatar_url} accent={user.accent} size={36} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold text-foreground">
+            {user.display_name}
+          </p>
+          <p className="truncate text-xs text-muted">
+            {sub ?? handle(user) ?? "no username yet"}
+          </p>
+        </div>
+      </Link>
       <div className="flex shrink-0 gap-1.5">{children}</div>
     </div>
   );
 }
 
 const btnPrimary =
-  "rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50";
+  "min-h-11 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary disabled:opacity-50";
 const btnGhost =
-  "rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-muted disabled:opacity-50";
+  "min-h-11 rounded-lg border border-border px-3 text-xs font-semibold text-muted disabled:opacity-50";
 
 export default function FriendsPage() {
   const router = useRouter();
@@ -207,7 +220,7 @@ export default function FriendsPage() {
 
       <TabTransition tabKey={tab} order={TABS}>
         {!data ? (
-          <p className="text-center text-sm text-muted">Loading…</p>
+          <RowsSkeleton />
         ) : tab === "friends" ? (
           data.friends.length === 0 ? (
             <p
@@ -338,7 +351,7 @@ export default function FriendsPage() {
                 type="submit"
                 disabled={busy === "search" || !query.trim()}
                 data-testid="friend-search-btn"
-                className="w-full rounded-xl bg-brand py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                className="w-full rounded-xl bg-primary py-2.5 text-sm font-semibold text-on-primary disabled:opacity-50"
               >
                 Search
               </button>

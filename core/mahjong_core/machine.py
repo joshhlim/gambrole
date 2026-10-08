@@ -163,6 +163,69 @@ def join_player(
     ]
 
 
+MAX_GUEST_NAME = 40
+
+
+def add_guest(
+    state: RoomState,
+    *,
+    expected_seq: int,
+    actor: UUID,
+    guest_id: UUID,
+    display_name: str,
+    now: datetime | None = None,
+    event_id: UUID | None = None,
+) -> list[Event]:
+    """The host seats someone with no account. One phone can then run the
+    whole table: the host acts for guests (the API's `as_player`), and a
+    guest can claim the game for a real account afterwards."""
+    _check_seq(state, expected_seq)
+    if actor != state.host_id:
+        raise NotAuthorized("Only the host can add guests.")
+    if state.status != RoomStatus.LOBBY:
+        raise IllegalTransition("Guests can only be added before the game starts.")
+    name = " ".join(display_name.split())
+    if not name or len(name) > MAX_GUEST_NAME:
+        raise IllegalTransition(f"A guest needs a name of 1-{MAX_GUEST_NAME} characters.")
+    if any(m.display_name.casefold() == name.casefold() for m in state.members.values()):
+        raise IllegalTransition(f"Someone called {name} is already at the table.")
+    if guest_id in state.members:
+        raise IllegalTransition("That guest is already at the table.")
+    if len(state.members) >= SEAT_COUNT:
+        raise IllegalTransition("Mahjong rooms only take 4 players.")
+    payload = {"player_id": str(guest_id), "display_name": name, "is_guest": True}
+    return [
+        _mk_event(
+            state, EventType.PLAYER_JOINED, actor, payload, _now(now), expected_seq + 1, event_id
+        )
+    ]
+
+
+def remove_guest(
+    state: RoomState,
+    *,
+    expected_seq: int,
+    actor: UUID,
+    guest_id: UUID,
+    now: datetime | None = None,
+    event_id: UUID | None = None,
+) -> list[Event]:
+    _check_seq(state, expected_seq)
+    if actor != state.host_id:
+        raise NotAuthorized("Only the host can remove guests.")
+    if state.status != RoomStatus.LOBBY:
+        raise IllegalTransition("Guests can only be removed before the game starts.")
+    member = state.members.get(guest_id)
+    if member is None or not member.is_guest:
+        raise IllegalTransition("No such guest at this table.")
+    payload = {"player_id": str(guest_id)}
+    return [
+        _mk_event(
+            state, EventType.PLAYER_LEFT, actor, payload, _now(now), expected_seq + 1, event_id
+        )
+    ]
+
+
 def assign_seats(
     state: RoomState,
     *,
@@ -595,10 +658,15 @@ def disband_room(
 def _apply_transfers(
     state: RoomState, hand: HandState, payload_transfers: list[dict[str, Any]]
 ) -> None:
+    # Payloads hold amounts in the rules' units — chips for games from
+    # before dollars — so this is the one place they become cents.
+    assert state.rules is not None
+    per_unit = state.rules.cents_per_unit
     for t in payload_transfers:
-        state.balances[UUID(t["from_player"])] -= t["amount_cents"]
-        state.balances[UUID(t["to_player"])] += t["amount_cents"]
-        hand.transfers.append(Transfer.model_validate(t))
+        cents = t["amount_cents"] * per_unit
+        state.balances[UUID(t["from_player"])] -= cents
+        state.balances[UUID(t["to_player"])] += cents
+        hand.transfers.append(Transfer.model_validate({**t, "amount_cents": cents}))
 
 
 def _open_next_hand(state: RoomState, closed: HandState, payload: dict[str, Any]) -> None:
@@ -647,7 +715,7 @@ def _apply_in_place(new: RoomState, event: Event) -> None:
             new.members[UUID(pid_str)].seat = seat
 
     elif event.type == EventType.GAME_STARTED:
-        new.rules = MahjongRules.model_validate(event.payload["rules"], context=REPLAY)
+        new.rules = MahjongRules.from_stored(event.payload["rules"], context=REPLAY)
         new.status = RoomStatus.IN_PROGRESS
         new.hands = [HandState(hand_no=1, wind=1, dealer_seat=0)]
 

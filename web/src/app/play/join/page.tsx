@@ -65,7 +65,7 @@ export default function JoinRoomPage() {
           type="submit"
           disabled={busy || !code.trim()}
           data-testid="join-room-btn"
-          className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+          className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary disabled:opacity-50"
         >
           Join
         </button>

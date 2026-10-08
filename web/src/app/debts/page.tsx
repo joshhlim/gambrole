@@ -8,8 +8,14 @@ import { money } from "@/lib/format";
 import { debtsApi } from "@/lib/debtsApi";
 import type { DebtView } from "@/lib/debtsTypes";
 import { usePolling } from "@/lib/usePolling";
+import { useCurrencySymbol } from "@/lib/preferences";
+import type { UserProfile } from "@/lib/friendsTypes";
+import { useProfiles } from "@/lib/useProfiles";
+import Avatar from "@/components/Avatar";
 import TabTransition from "@/components/TabTransition";
 import TabBar from "@/components/TabBar";
+import GuestTag from "@/components/GuestTag";
+import { RowsSkeleton } from "@/components/Skeleton";
 
 const TABS = ["owing", "owed"] as const;
 type Tab = (typeof TABS)[number];
@@ -25,13 +31,56 @@ function formatDate(iso: string): string {
   });
 }
 
-function OwingRow({
+function Counterparty({ debt, profile }: { debt: DebtView; profile?: UserProfile }) {
+  return (
+    <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+      <Avatar
+        name={debt.counterparty_display_name}
+        url={profile?.avatar_url}
+        accent={profile?.accent}
+        size={24}
+      />
+      <span className="min-w-0 truncate">{debt.counterparty_display_name}</span>
+      {debt.counterparty_is_guest && <GuestTag />}
+    </p>
+  );
+}
+
+/** A guest has no app to confirm a payment with, so either side closes the
+ * debt alone, in one step. */
+function SettleButton({
   debt,
-  onMarkPaid,
+  onSettle,
   busy,
 }: {
   debt: DebtView;
+  onSettle: (id: string) => void;
+  busy: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSettle(debt.settlement_id)}
+      disabled={busy}
+      data-testid={`settle-btn-${debt.settlement_id}`}
+      className="w-full rounded-lg bg-primary py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
+    >
+      Mark settled
+    </button>
+  );
+}
+
+function OwingRow({
+  debt,
+  profile,
+  onMarkPaid,
+  onSettle,
+  busy,
+}: {
+  debt: DebtView;
+  profile?: UserProfile;
   onMarkPaid: (id: string) => void;
+  onSettle: (id: string) => void;
   busy: boolean;
 }) {
   return (
@@ -39,11 +88,9 @@ function OwingRow({
       data-testid={`debt-owing-${debt.settlement_id}`}
       className="rounded-xl border border-border bg-surface px-4 py-3"
     >
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-semibold text-foreground">
-            {debt.counterparty_display_name}
-          </p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <Counterparty debt={debt} profile={profile} />
           <p className="text-xs text-muted">
             {capitalize(debt.game_type)} · {formatDate(debt.created_at)}
             {debt.auto_ended
@@ -58,18 +105,20 @@ function OwingRow({
         </p>
       </div>
       <div className="mt-2">
-        {debt.status === "pending" && (
+        {debt.counterparty_is_guest && debt.status !== "approved" ? (
+          <SettleButton debt={debt} onSettle={onSettle} busy={busy} />
+        ) : debt.status === "pending" && (
           <button
             type="button"
             onClick={() => onMarkPaid(debt.settlement_id)}
             disabled={busy}
             data-testid={`mark-paid-btn-${debt.settlement_id}`}
-            className="w-full rounded-lg bg-brand py-2 text-xs font-semibold text-white disabled:opacity-50"
+            className="w-full rounded-lg bg-primary py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
           >
             Mark Paid
           </button>
         )}
-        {debt.status === "marked_paid" && (
+        {debt.status === "marked_paid" && !debt.counterparty_is_guest && (
           <p className="text-xs text-muted">
             Waiting for {debt.counterparty_display_name} to approve.
           </p>
@@ -84,13 +133,17 @@ function OwingRow({
 
 function OwedRow({
   debt,
+  profile,
   onApprove,
   onReject,
+  onSettle,
   busy,
 }: {
   debt: DebtView;
+  profile?: UserProfile;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
+  onSettle: (id: string) => void;
   busy: boolean;
 }) {
   const needsApproval = debt.status === "marked_paid";
@@ -99,15 +152,13 @@ function OwedRow({
       data-testid={`debt-owed-${debt.settlement_id}`}
       className={`rounded-xl border px-4 py-3 ${
         needsApproval
-          ? "border-brand-strong bg-[#FFF8E1]"
+          ? "border-brand-strong bg-highlight"
           : "border-border bg-surface"
       }`}
     >
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-semibold text-foreground">
-            {debt.counterparty_display_name}
-          </p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <Counterparty debt={debt} profile={profile} />
           <p className="text-xs text-muted">
             {capitalize(debt.game_type)} · {formatDate(debt.created_at)}
             {debt.auto_ended
@@ -122,17 +173,19 @@ function OwedRow({
         </p>
       </div>
       <div className="mt-2">
-        {debt.status === "pending" && (
+        {debt.counterparty_is_guest && debt.status !== "approved" ? (
+          <SettleButton debt={debt} onSettle={onSettle} busy={busy} />
+        ) : debt.status === "pending" && (
           <p className="text-xs text-muted">Not yet marked paid.</p>
         )}
-        {needsApproval && (
+        {needsApproval && !debt.counterparty_is_guest && (
           <div className="flex gap-2">
             <button
               type="button"
               onClick={() => onApprove(debt.settlement_id)}
               disabled={busy}
               data-testid={`approve-btn-${debt.settlement_id}`}
-              className="flex-1 rounded-lg bg-brand py-2 text-xs font-semibold text-white disabled:opacity-50"
+              className="flex-1 rounded-lg bg-primary py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
             >
               Approve
             </button>
@@ -172,6 +225,13 @@ export default function DebtsPage() {
   useEffect(() => {
     if (checked && !user) router.replace("/");
   }, [checked, user, router]);
+
+  useCurrencySymbol();
+  const profiles = useProfiles(
+    data
+      ? [...data.owing, ...data.owed].filter((d) => !d.counterparty_is_guest).map((d) => d.counterparty_id)
+      : [],
+  );
 
   if (!user) return null;
 
@@ -240,7 +300,7 @@ export default function DebtsPage() {
       )}
 
       {!data ? (
-        <p className="text-center text-sm text-muted">Loading…</p>
+        <RowsSkeleton rows={3} height="h-24" />
       ) : (
         <div className="space-y-4">
           <TabBar
@@ -267,10 +327,12 @@ export default function DebtsPage() {
                     <OwingRow
                       key={debt.settlement_id}
                       debt={debt}
+                      profile={profiles[debt.counterparty_id]}
                       busy={busyId === debt.settlement_id}
                       onMarkPaid={(id) =>
                         runAction(id, debtsApi.markPaid, "owing")
                       }
+                      onSettle={(id) => runAction(id, debtsApi.settle, "owing")}
                     />
                   ))}
                 </div>
@@ -287,11 +349,13 @@ export default function DebtsPage() {
                     <OwedRow
                       key={debt.settlement_id}
                       debt={debt}
+                      profile={profiles[debt.counterparty_id]}
                       busy={busyId === debt.settlement_id}
                       onApprove={(id) =>
                         runAction(id, debtsApi.approve, "owed")
                       }
                       onReject={(id) => runAction(id, debtsApi.reject, "owed")}
+                      onSettle={(id) => runAction(id, debtsApi.settle, "owed")}
                     />
                   ))}
                 </div>

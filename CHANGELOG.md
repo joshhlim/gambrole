@@ -7,6 +7,25 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Guest players.** The host can seat people without an account (both
+  games) and enter their turns from one phone (`as_player`). Debts with a
+  guest settle one-sided (`POST /debts/{id}/settle`). After the game, each
+  guest has a claim link (`/claim/<token>`): signing up and claiming makes
+  that game — its stats, history and debts — the new account's. Claimed
+  guests are linked as extra identities of the account (`app/identity.py`);
+  the event log is never rewritten.
+- **Groups.** A regular crew with an invite code, a running leaderboard
+  (everyone who played in the group's games, guests included, claimed
+  guests folded into their accounts), recent games, and owner controls
+  (rename, remove member, new invite code, delete). Games can be created
+  in a group from /new.
+- **Profiles.** Photo (resized on the phone, stored in the database, served
+  through signed, cache-forever URLs), bio, city, accent colour, and a
+  public profile page with headline stats.
+- **Player settings.** Light/dark/system theme, currency symbol (display
+  only), saved default rules per game, and privacy controls: who sees your
+  bio/city, who sees your stats, and whether search finds you.
+- **First-run walkthrough**, skippable, shown once.
 - A third sign-in mode, `local`, for internal testing: the same email +
   password screens (sign up, log in, forgot password, Settings) backed by
   the API's own `test_accounts` table instead of Supabase. Everything is
@@ -96,6 +115,15 @@ All notable changes to this project are documented here. The format follows
     equality and cached-transfer recomputation; CI runs `alembic check`.
 
 ### Changed
+- **Mahjong is in dollars, not chips.** Rules and balances are cents; the
+  rule fields are `yao_amount`, `gang_amount`, `zimo_bonus_amount`,
+  `klppdd_amount` plus `cents_per_unit` (1 for new games). Games played
+  before the switch replay in dollars at $0.50/chip, so history matches the
+  debts already recorded; old `*_chips` field names are still accepted and
+  read as chips (older clients and stored games). `base_chips` and the
+  chip-stack display are gone; presets pay exactly what they did before.
+  Stats fields `best_hand_chips`/`worst_hand_chips` → `*_cents`;
+  `overview.mahjong_chips` removed.
 - `TAIDI_AUTH_MODE` has no default: the API refuses to start without it
   (dev mode trusts a secret committed to the repo, so a missing setting
   must not silently enable it). Migrations and scripts don't need it.

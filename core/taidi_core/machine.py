@@ -130,6 +130,67 @@ def join_player(
     ]
 
 
+MAX_GUEST_NAME = 40
+
+
+def add_guest(
+    state: RoomState,
+    *,
+    expected_seq: int,
+    actor: UUID,
+    guest_id: UUID,
+    display_name: str,
+    now: datetime | None = None,
+    event_id: UUID | None = None,
+) -> list[Event]:
+    """The host seats someone with no account. One phone can then run the
+    whole table: the host acts for guests (the API's `as_player`), and a
+    guest can claim the game for a real account afterwards."""
+    _check_seq(state, expected_seq)
+    if actor != state.host_id:
+        raise NotAuthorized("Only the host can add guests.")
+    if state.status != RoomStatus.LOBBY:
+        raise IllegalTransition("Guests can only be added before the game starts.")
+    name = " ".join(display_name.split())
+    if not name or len(name) > MAX_GUEST_NAME:
+        raise IllegalTransition(f"A guest needs a name of 1-{MAX_GUEST_NAME} characters.")
+    if any(m.display_name.casefold() == name.casefold() for m in state.members.values()):
+        raise IllegalTransition(f"Someone called {name} is already at the table.")
+    if guest_id in state.members:
+        raise IllegalTransition("That guest is already at the table.")
+    payload = {"player_id": str(guest_id), "display_name": name, "is_guest": True}
+    return [
+        _mk_event(
+            state, EventType.PLAYER_JOINED, actor, payload, _now(now), expected_seq + 1, event_id
+        )
+    ]
+
+
+def remove_guest(
+    state: RoomState,
+    *,
+    expected_seq: int,
+    actor: UUID,
+    guest_id: UUID,
+    now: datetime | None = None,
+    event_id: UUID | None = None,
+) -> list[Event]:
+    _check_seq(state, expected_seq)
+    if actor != state.host_id:
+        raise NotAuthorized("Only the host can remove guests.")
+    if state.status != RoomStatus.LOBBY:
+        raise IllegalTransition("Guests can only be removed before the game starts.")
+    member = state.members.get(guest_id)
+    if member is None or not member.is_guest:
+        raise IllegalTransition("No such guest at this table.")
+    payload = {"player_id": str(guest_id)}
+    return [
+        _mk_event(
+            state, EventType.PLAYER_LEFT, actor, payload, _now(now), expected_seq + 1, event_id
+        )
+    ]
+
+
 def leave_room(
     state: RoomState,
     *,
@@ -706,8 +767,12 @@ def _apply_in_place(new: RoomState, event: Event) -> None:
         # money still has to settle with everyone else's.
         if new.host_id == pid and new.members:
             # Ending the game is host-only, so the room would be unclosable
-            # if the host walked off with the title.
-            new.host_id = next(iter(sorted(new.members, key=lambda p: new.members[p].seat)))
+            # if the host walked off with the title. A guest can't hold it —
+            # nobody could act as them — so the next account-holder by seat
+            # does, falling back to a guest only if no one else is left.
+            by_seat = sorted(new.members, key=lambda p: new.members[p].seat)
+            accounts = [p for p in by_seat if not new.members[p].is_guest]
+            new.host_id = (accounts or by_seat)[0]
 
     elif event.type == EventType.PLAYER_LEFT:
         pid = UUID(event.payload["player_id"])

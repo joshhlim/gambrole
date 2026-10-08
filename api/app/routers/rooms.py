@@ -20,13 +20,15 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, status
 from mahjong_core.models import MahjongRules
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from taidi_core import machine
 from taidi_core.models import Event, GameRules, RoomState, RoomStatus
 
 from ..auth import CurrentUser, get_current_user
 from ..db import get_session
-from ..dispatch import dispatch, pinned_seq
+from ..db import guests as guests_table
+from ..dispatch import acting_as, dispatch, pinned_seq
 from ..events_store import (
     AlreadyInActiveRoom,
     AnyRoomState,
@@ -39,12 +41,16 @@ from ..events_store import (
     load_room,
     resolve_invite_code,
 )
+from ..group_service import is_member
+from ..identity import identity_ids
 from ..ratelimit import rate_limit
 from ..schemas import (
+    AddGuestRequest,
     CreateRoomRequest,
     RoundCommandRequest,
     SeqOnlyRequest,
     StartGameRequest,
+    StepOutRequest,
     SubmitCardsRequest,
     SubmitForRequest,
 )
@@ -67,7 +73,17 @@ def room_json(state: AnyRoomState, meta: RoomMeta) -> dict[str, Any]:
         "invite_code": meta.invite_code,
         "game_type": meta.game_type,
         "draft_rules": meta.draft_rules,
+        "group_id": str(meta.group_id) if meta.group_id else None,
     }
+
+
+def parse_rules(game_type: str, raw: dict[str, Any]) -> GameRules | MahjongRules:
+    """Mahjong rules without `cents_per_unit` come from before amounts were
+    dollars (an older client, or a room drafted then) and are read as chips
+    — taking them as cents would quietly play at 1/50th the stakes."""
+    if game_type == "mahjong":
+        return MahjongRules.from_stored(raw)
+    return GameRules.model_validate(raw)
 
 
 def draft_rules_or_default[R: (GameRules, MahjongRules)](rules_type: type[R], meta: RoomMeta) -> R:
@@ -76,7 +92,9 @@ def draft_rules_or_default[R: (GameRules, MahjongRules)](rules_type: type[R], me
     if meta.draft_rules is None:
         return rules_type()
     try:
-        return rules_type.model_validate(meta.draft_rules)
+        rules = parse_rules(meta.game_type, meta.draft_rules)
+        assert isinstance(rules, rules_type)
+        return rules
     except ValidationError as e:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -122,16 +140,15 @@ async def create(
 ) -> dict[str, Any]:
     draft: dict[str, Any] | None = None
     if body.rules is not None:
-        rules_type: type[GameRules] | type[MahjongRules] = (
-            MahjongRules if body.game_type == "mahjong" else GameRules
-        )
         try:
-            draft = rules_type.model_validate(body.rules).model_dump(mode="json")
+            draft = parse_rules(body.game_type, body.rules).model_dump(mode="json")
         except ValidationError as e:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 [{"loc": ["body", "rules", *err["loc"]], "msg": err["msg"]} for err in e.errors()],
             ) from e
+    if body.group_id is not None and not await is_member(session, body.group_id, user.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You're not in that group.")
     await ensure_user(session, user)
     try:
         state, meta = await create_room(
@@ -142,6 +159,7 @@ async def create(
             now=utcnow(),
             game_type=body.game_type,
             draft_rules=draft,
+            group_id=body.group_id,
         )
     except AlreadyInActiveRoom as e:
         raise_for_already_active(e)
@@ -204,7 +222,11 @@ async def get_state(
         state, meta = await load_room(session, room_id)
     except RoomNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Room not found.") from e
-    if not can_view(state, user.user_id):
+    # The direct check covers every poll; only someone looking at a game
+    # they played as a guest (and later claimed) needs the extra query.
+    if not can_view(state, user.user_id) and not any(
+        can_view(state, pid) for pid in await identity_ids(session, user.user_id)
+    ):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You're not in this game.")
     return room_json(state, meta)
 
@@ -300,7 +322,7 @@ async def win(
         lambda state: machine.claim_win(
             state,
             expected_seq=_round_seq(state, body.expected_seq, body.round_no),
-            actor=user.user_id,
+            actor=acting_as(state, user.user_id, body.as_player),
             now=utcnow(),
         ),
     )
@@ -319,7 +341,7 @@ async def submit_cards(
         lambda state: machine.submit_cards(
             state,
             expected_seq=_round_seq(state, body.expected_seq, body.round_no),
-            actor=user.user_id,
+            actor=acting_as(state, user.user_id, body.as_player),
             cards=body.cards,
             now=utcnow(),
         ),
@@ -360,7 +382,7 @@ async def special_hand(
         lambda state: machine.add_special_hand(
             state,
             expected_seq=_round_seq(state, body.expected_seq, body.round_no),
-            actor=user.user_id,
+            actor=acting_as(state, user.user_id, body.as_player),
             now=utcnow(),
         ),
     )
@@ -369,7 +391,7 @@ async def special_hand(
 @router.post("/{room_id}/step-out")
 async def step_out(
     room_id: UUID,
-    body: SeqOnlyRequest,
+    body: StepOutRequest,
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -380,7 +402,10 @@ async def step_out(
         session,
         room_id,
         lambda state: machine.step_out(
-            state, expected_seq=body.expected_seq, actor=user.user_id, now=utcnow()
+            state,
+            expected_seq=body.expected_seq,
+            actor=acting_as(state, user.user_id, body.as_player),
+            now=utcnow(),
         ),
     )
 
@@ -400,7 +425,7 @@ async def void_special(
         lambda state: machine.void_special_hand(
             state,
             expected_seq=_round_seq(state, body.expected_seq, body.round_no),
-            actor=user.user_id,
+            actor=acting_as(state, user.user_id, body.as_player),
             now=utcnow(),
         ),
     )
@@ -419,7 +444,7 @@ async def void(
         lambda state: machine.void_last_round(
             state,
             expected_seq=_round_seq(state, body.expected_seq, body.round_no),
-            actor=user.user_id,
+            actor=acting_as(state, user.user_id, body.as_player),
             now=utcnow(),
         ),
     )
@@ -439,3 +464,81 @@ async def end(
             state, expected_seq=body.expected_seq, actor=user.user_id, now=utcnow()
         ),
     )
+
+
+@router.post("/{room_id}/guests")
+async def add_guest(
+    room_id: UUID,
+    body: AddGuestRequest,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Seat someone with no account — see machine.add_guest."""
+    return await _dispatch(
+        session,
+        room_id,
+        lambda state: machine.add_guest(
+            state,
+            expected_seq=body.expected_seq,
+            actor=user.user_id,
+            guest_id=uuid4(),
+            display_name=body.display_name,
+            now=utcnow(),
+        ),
+    )
+
+
+@router.post("/{room_id}/guests/{guest_id}/remove")
+async def remove_guest(
+    room_id: UUID,
+    guest_id: UUID,
+    body: SeqOnlyRequest,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    return await _dispatch(
+        session,
+        room_id,
+        lambda state: machine.remove_guest(
+            state,
+            expected_seq=body.expected_seq,
+            actor=user.user_id,
+            guest_id=guest_id,
+            now=utcnow(),
+        ),
+    )
+
+
+@router.get("/{room_id}/guest-claims")
+async def guest_claims(
+    room_id: UUID,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """The host's list of claim links for this room's guests, for either
+    game. Host-only: a claim token is all it takes to take over a guest's
+    games."""
+    try:
+        state, _meta = await load_room(session, room_id)
+    except RoomNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Room not found.") from e
+    if user.user_id != state.host_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the host can share claim links.")
+    rows = (
+        await session.execute(
+            select(guests_table)
+            .where(guests_table.c.room_id == room_id)
+            .order_by(guests_table.c.created_at)
+        )
+    ).all()
+    return {
+        "guests": [
+            {
+                "guest_id": str(row.guest_id),
+                "display_name": row.display_name,
+                "claim_token": row.claim_token,
+                "claimed": row.claimed_by is not None,
+            }
+            for row in rows
+        ]
+    }

@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { devLogin, passwordAuth, useStoredUser } from "@/lib/auth";
+import { useStoredUser } from "@/lib/auth";
 import type { ActiveRoom } from "@/lib/types";
-import SupabaseAuthForm from "@/components/SupabaseAuthForm";
+import SignInPanel from "@/components/SignInPanel";
 
 export default function HomePage() {
   const router = useRouter();
@@ -39,32 +39,12 @@ export default function HomePage() {
     };
   }, [user]);
 
-  const [nameInput, setNameInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleDevLogin(e: React.FormEvent) {
-    e.preventDefault();
-    const name = nameInput.trim();
-    if (!name) return;
-    setBusy(true);
-    setError(null);
-    try {
-      // storeAuth inside devLogin announces this; useStoredUser hears it.
-      await devLogin(name);
-    } catch {
-      setError("Couldn't sign in. Is the API running?");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <main className="flex flex-1 flex-col px-6 py-6">
       <div className="flex w-full flex-1 items-center justify-center">
         <div className="w-full max-w-sm">
           <div className="text-center mb-10">
-            <div className="mx-auto mb-4 flex h-16 w-16 rotate-3 items-center justify-center rounded-2xl bg-brand shadow-lg shadow-brand/25">
+            <div className="mx-auto mb-4 flex h-16 w-16 rotate-3 items-center justify-center rounded-2xl bg-tile shadow-lg shadow-black/15">
               <span className="font-display text-3xl font-extrabold text-gold-bright">
                 G
               </span>
@@ -78,30 +58,9 @@ export default function HomePage() {
           </div>
 
           {!user ? (
-            passwordAuth ? (
-              <SupabaseAuthForm
-                onSignedIn={(u, text) => text && setNotice({ userId: u.user_id, text })}
-              />
-            ) : (
-              <form onSubmit={handleDevLogin} className="space-y-3">
-                <input
-                  className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm outline-none focus:border-brand-strong"
-                  data-testid="display-name-input"
-                  placeholder="Your name"
-                  value={nameInput}
-                  onChange={(e) => setNameInput(e.target.value)}
-                  autoFocus
-                />
-                <button
-                  type="submit"
-                  disabled={busy || !nameInput.trim()}
-                  data-testid="continue-btn"
-                  className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
-                >
-                  Continue
-                </button>
-              </form>
-            )
+            <SignInPanel
+              onSignedIn={(u, text) => text && setNotice({ userId: u.user_id, text })}
+            />
           ) : (
             <div className="space-y-4">
               {notice && notice.userId === user.user_id && (
@@ -117,7 +76,7 @@ export default function HomePage() {
                     )
                   }
                   data-testid="rejoin-room-btn"
-                  className="w-full rounded-xl bg-brand-strong py-3 text-sm font-semibold text-white"
+                  className="w-full rounded-xl bg-primary-strong py-3 text-sm font-semibold text-on-primary"
                 >
                   Rejoin Room · {activeRoom.invite_code}
                 </button>
@@ -125,26 +84,31 @@ export default function HomePage() {
 
               <button
                 onClick={() => router.push("/play")}
-                disabled={busy}
                 data-testid="play-btn"
-                className="w-full rounded-xl bg-brand py-5 text-base font-semibold text-white disabled:opacity-50"
+                className="w-full rounded-xl bg-primary py-5 text-base font-semibold text-on-primary"
               >
                 Play
               </button>
 
-              <button
-                onClick={() => router.push("/friends")}
-                data-testid="friends-btn"
-                className="w-full rounded-xl border border-border bg-surface py-5 text-base font-semibold text-brand"
-              >
-                Friends
-              </button>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => router.push("/friends")}
+                  data-testid="friends-btn"
+                  className="rounded-xl border border-border bg-surface py-5 text-base font-semibold text-brand"
+                >
+                  Friends
+                </button>
+                <button
+                  onClick={() => router.push("/groups")}
+                  data-testid="groups-btn"
+                  className="rounded-xl border border-border bg-surface py-5 text-base font-semibold text-brand"
+                >
+                  Groups
+                </button>
+              </div>
             </div>
           )}
 
-          {error && (
-            <p className="mt-4 text-center text-sm text-danger">{error}</p>
-          )}
         </div>
       </div>
     </main>

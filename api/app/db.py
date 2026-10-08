@@ -28,17 +28,20 @@ from collections.abc import AsyncIterator
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     PrimaryKeyConstraint,
     String,
     Table,
     UniqueConstraint,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -47,6 +50,28 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from .config import settings
 
 metadata = MetaData()
+
+# A regular crew: the same people, game after game. Games created in a group
+# feed its leaderboard (group_service.py). Joining is by invite code.
+groups = Table(
+    "groups",
+    metadata,
+    Column("group_id", PGUUID(as_uuid=True), primary_key=True),
+    Column("name", String(60), nullable=False),
+    Column("owner_id", PGUUID(as_uuid=True), nullable=False),
+    Column("invite_code", String(12), nullable=False, unique=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+group_members = Table(
+    "group_members",
+    metadata,
+    Column("group_id", PGUUID(as_uuid=True), ForeignKey("groups.group_id"), nullable=False),
+    Column("user_id", PGUUID(as_uuid=True), nullable=False),
+    Column("joined_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("group_id", "user_id"),
+    Index("ix_group_members_user_id", "user_id"),
+)
 
 rooms = Table(
     "rooms",
@@ -66,7 +91,11 @@ rooms = Table(
     # sending any (see events_store.RoomMeta). Null for rooms created
     # before this existed, or created without rules.
     Column("draft_rules", JSONB, nullable=True),
+    # The group (a regular crew, see `groups`) this game was played in, if
+    # any — what group leaderboards are built from.
+    Column("group_id", PGUUID(as_uuid=True), ForeignKey("groups.group_id"), nullable=True),
     Index("ix_rooms_host_id", "host_id"),
+    Index("ix_rooms_group_id", "group_id"),
 )
 
 events = Table(
@@ -111,7 +140,35 @@ users = Table(
     Column("username", String(24), nullable=True, unique=True),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    # Profile (profile_service.py). All optional; accent is one of a fixed
+    # palette the web app renders in both themes.
+    Column("bio", String(160), nullable=True),
+    Column("city", String(60), nullable=True),
+    Column("accent", String(16), nullable=True),
+    # Bumped on every photo change; part of the photo's URL so caches never
+    # serve an old one. Null: no photo.
+    Column("avatar_version", Integer, nullable=True),
+    # Per-account settings that follow you across devices: theme, currency
+    # symbol, default rules per game. Shape owned by profile_service.
+    Column("preferences", JSONB, nullable=False, server_default="{}"),
+    # Privacy: who sees your bio/city (everyone | friends | nobody), who
+    # sees your stats (friends | nobody), and whether search can find you.
+    Column("profile_visibility", String(16), nullable=False, server_default="everyone"),
+    Column("stats_visibility", String(16), nullable=False, server_default="friends"),
+    Column("searchable", Boolean, nullable=False, server_default=true()),
     Index("ix_users_email", "email"),
+)
+
+# Profile photos, already shrunk by the client (≤256px, a few tens of KB),
+# so they live in the database: no storage service to configure, and they
+# work the same in every auth mode. Served by profile router's /avatars.
+user_avatars = Table(
+    "user_avatars",
+    metadata,
+    Column("user_id", PGUUID(as_uuid=True), ForeignKey("users.user_id"), primary_key=True),
+    Column("content_type", String(32), nullable=False),
+    Column("data", LargeBinary, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
 friendships = Table(
@@ -143,6 +200,26 @@ friendships = Table(
     Index("ix_friendships_addressee", "addressee_id"),
 )
 
+# Players with no account, seated by a host (machine.add_guest) so one phone
+# can run a whole table. Kept in sync with the event log by
+# events_store.append_events. A guest can later claim their games for a real
+# account via `claim_token`; claiming sets `claimed_by`, and from then on the
+# guest id counts as one of that user's identities (app/identity.py) —
+# nothing in the event log is rewritten.
+guests = Table(
+    "guests",
+    metadata,
+    Column("guest_id", PGUUID(as_uuid=True), primary_key=True),
+    Column("room_id", PGUUID(as_uuid=True), ForeignKey("rooms.room_id"), nullable=False),
+    Column("display_name", String(100), nullable=False),
+    Column("claim_token", String(64), nullable=False, unique=True),
+    Column("claimed_by", PGUUID(as_uuid=True), nullable=True),
+    Column("claimed_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Index("ix_guests_room_id", "room_id"),
+    Index("ix_guests_claimed_by", "claimed_by"),
+)
+
 # Local-mode accounts (TAIDI_AUTH_MODE=local) — internal testing only.
 # Deliberately plain: passwords are stored as typed and reset tokens as
 # issued, so the whole table can be read as-is in a SQL client or the
@@ -171,10 +248,10 @@ settlements = Table(
     Column("game_type", String(16), nullable=False),
     Column("from_player", PGUUID(as_uuid=True), nullable=False),
     Column("to_player", PGUUID(as_uuid=True), nullable=False),
-    # Already-converted real cents at insert time (mahjong chips have been
-    # multiplied by MAHJONG_CHIP_VALUE_CENTS) — this is a ledger entry, not
-    # a recomputed display metric, so it must not reprice itself if that
-    # constant is ever tuned later. 64-bit: a whole night's net between two
+    # Real cents, fixed at insert time — a ledger entry, not a recomputed
+    # display metric, so it never reprices itself. (Mahjong state is in
+    # cents already; see mahjong_core.models.MahjongRules.cents_per_unit.)
+    # 64-bit: a whole night's net between two
     # players is a sum of many rounds, and an overflow here would make a
     # game impossible to end.
     Column("amount_cents", BigInteger, nullable=False),

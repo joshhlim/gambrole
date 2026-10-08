@@ -1,6 +1,6 @@
 "use client";
 
-import { post } from "./api";
+import { actingAs, post } from "./api";
 import type { MahjongRoomState } from "./mahjongTypes";
 
 type Room = MahjongRoomState;
@@ -23,18 +23,33 @@ export const mahjongApi = {
     post<Room>(`/rooms/${roomId}/mahjong/start`, { expected_seq: expectedSeq }),
   // Hand actions name the hand they're for (hand_no = the last hand as this
   // device saw it) — see api.ts's round_no for why.
-  declareYao: (roomId: string, expectedSeq: number, handNo: number, targetSeat: number, an: boolean) =>
+  declareYao: (
+    roomId: string,
+    expectedSeq: number,
+    handNo: number,
+    targetSeat: number,
+    an: boolean,
+    asPlayer?: string,
+  ) =>
     post<Room>(`/rooms/${roomId}/mahjong/yao`, {
       expected_seq: expectedSeq,
       hand_no: handNo,
       target_seat: targetSeat,
       an,
+      ...actingAs(asPlayer),
     }),
-  declareGang: (roomId: string, expectedSeq: number, handNo: number, target: number | "angang") =>
+  declareGang: (
+    roomId: string,
+    expectedSeq: number,
+    handNo: number,
+    target: number | "angang",
+    asPlayer?: string,
+  ) =>
     post<Room>(`/rooms/${roomId}/mahjong/gang`, {
       expected_seq: expectedSeq,
       hand_no: handNo,
       target,
+      ...actingAs(asPlayer),
     }),
   declareHu: (
     roomId: string,
@@ -45,6 +60,7 @@ export const mahjongApi = {
     tai: number,
     zimoBonus: boolean,
     klppdd: boolean,
+    asPlayer?: string,
   ) =>
     post<Room>(`/rooms/${roomId}/mahjong/hu`, {
       expected_seq: expectedSeq,
@@ -54,6 +70,7 @@ export const mahjongApi = {
       tai,
       zimo_bonus: zimoBonus,
       klppdd,
+      ...actingAs(asPlayer),
     }),
   declareNoWin: (roomId: string, expectedSeq: number, handNo: number) =>
     post<Room>(`/rooms/${roomId}/mahjong/no-win`, { expected_seq: expectedSeq, hand_no: handNo }),

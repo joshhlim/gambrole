@@ -25,8 +25,8 @@ from taidi_core.stats import taidi_round_stats
 
 from .db import room_participants as room_participants_table
 from .db import rooms as rooms_table
-from .events_store import rebuild_many
-from .money import MAHJONG_CHIP_VALUE_CENTS
+from .events_store import AnyRoomState, rebuild_many
+from .identity import identity_ids, remap
 
 
 class SessionResult(BaseModel):
@@ -41,7 +41,6 @@ class OverviewStats(BaseModel):
     total_cents: int
     taidi_cents: int
     mahjong_cents: int
-    mahjong_chips: int
     total_sessions: int
     taidi_sessions: int
     mahjong_sessions: int
@@ -60,12 +59,13 @@ class StatsResponse(BaseModel):
     mahjong: MahjongPlayerStats | None
 
 
-async def ended_room_refs(session: AsyncSession, player_id: UUID) -> list[tuple[UUID, str]]:
-    """Every (room_id, game_type) for an ENDED room this player has history
-    in — as host (rooms.host_id, who never gets a room_participants row —
-    see ADR-0007) or as a joiner (room_participants)."""
+async def ended_room_refs(session: AsyncSession, ids: list[UUID]) -> list[tuple[UUID, str]]:
+    """Every (room_id, game_type) for an ENDED room any of these identities
+    (see identity.py) has history in — as host (rooms.host_id, who never
+    gets a room_participants row — see ADR-0007) or as a joiner
+    (room_participants)."""
     as_host = select(rooms_table.c.room_id, rooms_table.c.game_type).where(
-        rooms_table.c.host_id == player_id, rooms_table.c.status == "ended"
+        rooms_table.c.host_id.in_(ids), rooms_table.c.status == "ended"
     )
     as_participant = (
         select(rooms_table.c.room_id, rooms_table.c.game_type)
@@ -75,12 +75,24 @@ async def ended_room_refs(session: AsyncSession, player_id: UUID) -> list[tuple[
             )
         )
         .where(
-            room_participants_table.c.player_id == player_id,
+            room_participants_table.c.player_id.in_(ids),
             rooms_table.c.status == "ended",
         )
     )
     rows = await session.execute(union(as_host, as_participant))
     return [(row.room_id, row.game_type) for row in rows.all()]
+
+
+async def load_ended_rooms(
+    session: AsyncSession, player_id: UUID
+) -> tuple[list[UUID], list[tuple[UUID, str]], dict[UUID, AnyRoomState]]:
+    """A player's identities, ended rooms, and those rooms folded — with any
+    guest they've claimed rewritten to `player_id` (identity.remap), so the
+    caller can treat them as one person throughout."""
+    ids = await identity_ids(session, player_id)
+    refs = await ended_room_refs(session, ids)
+    states = await rebuild_many(session, [room_id for room_id, _game_type in refs])
+    return ids, refs, {room_id: remap(state, ids) for room_id, state in states.items()}
 
 
 def _streak(sessions: list[SessionResult]) -> int:
@@ -99,9 +111,7 @@ def _streak(sessions: list[SessionResult]) -> int:
 
 
 async def build_stats_for(session: AsyncSession, player_id: UUID) -> StatsResponse:
-    room_refs = await ended_room_refs(session, player_id)
-
-    states = await rebuild_many(session, [room_id for room_id, _game_type in room_refs])
+    _ids, room_refs, states = await load_ended_rooms(session, player_id)
 
     taidi_rooms: list[TaidiRoomState] = []
     mahjong_rooms: list[MahjongRoomState] = []
@@ -134,17 +144,14 @@ async def build_stats_for(session: AsyncSession, player_id: UUID) -> StatsRespon
                 cumulative_cents=0,
             )
         )
-    mahjong_chips_total = 0
     for mahjong_state in mahjong_rooms:
         assert mahjong_state.ended_at is not None
-        chips = mahjong_state.balances.get(player_id, 0)
-        mahjong_chips_total += chips
         sessions.append(
             SessionResult(
                 room_id=mahjong_state.room_id,
                 game_type="mahjong",
                 ended_at=mahjong_state.ended_at,
-                net_cents=chips * MAHJONG_CHIP_VALUE_CENTS,
+                net_cents=mahjong_state.balances.get(player_id, 0),
                 cumulative_cents=0,
             )
         )
@@ -172,7 +179,6 @@ async def build_stats_for(session: AsyncSession, player_id: UUID) -> StatsRespon
         total_cents=taidi_cents + mahjong_cents,
         taidi_cents=taidi_cents,
         mahjong_cents=mahjong_cents,
-        mahjong_chips=mahjong_chips_total,
         total_sessions=taidi_sessions + mahjong_sessions,
         taidi_sessions=taidi_sessions,
         mahjong_sessions=mahjong_sessions,

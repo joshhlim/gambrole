@@ -11,21 +11,30 @@ export interface TaiPayout {
   zimo: number;
 }
 
-// Money is chips, not cents — real mahjong stakes tables are non-linear by
-// tai (a 5-tai hand pays far more than 5x a 1-tai hand), hence a table
-// rather than a rate multiplied by tai. tai_table's keys are the tai level
-// as a string (1..max_tai) — JSON object keys are always strings, even
-// though the wire value started as a Python dict[int, TaiPayout].
+// Amounts are in units of cents_per_unit: 1 (cents) for every game created
+// since Mahjong moved to dollars, 50 for older games scored in $0.50 chips —
+// so a rule amount is always shown as `amount * cents_per_unit` cents (see
+// ruleCents). Balances and transfers are already cents for every game.
+// Real mahjong stakes tables are non-linear by tai (a 5-tai hand pays far
+// more than 5x a 1-tai hand), hence a table rather than a rate multiplied
+// by tai. tai_table's keys are the tai level as a string (1..max_tai) — JSON
+// object keys are always strings, even though the wire value started as a
+// Python dict[int, TaiPayout].
 export interface MahjongRules {
-  base_chips: number;
-  yao_chips: number;
-  gang_chips: number;
+  cents_per_unit: number;
+  yao_amount: number;
+  gang_amount: number;
   // Optional extra bonuses toggled per-HU (see MahjongRoom's HuFlow). Both
   // default to 0 (off).
-  zimo_bonus_chips: number;
-  klppdd_chips: number;
+  zimo_bonus_amount: number;
+  klppdd_amount: number;
   max_tai: number;
   tai_table: Record<string, TaiPayout>;
+}
+
+/** A rule amount in cents, whatever unit the game was set up in. */
+export function ruleCents(r: MahjongRules, amount: number): number {
+  return amount * r.cents_per_unit;
 }
 
 export interface MahjongTransfer {
@@ -62,6 +71,8 @@ export interface MahjongRoomState {
   ended_at: string | null;
   pending_wind_decision: boolean;
   invite_code: string;
+  /** See TaidiRoomState.group_id. */
+  group_id: string | null;
 }
 
 // Fixed seat nicknames — seats are plain 0-3 ints on the wire; these labels

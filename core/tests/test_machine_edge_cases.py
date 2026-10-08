@@ -141,3 +141,55 @@ def test_a_game_started_under_looser_rules_still_replays(now):
     loose = {**GameRules().model_dump(mode="json"), "card_value_cents": 50_000}
     replayed = machine.fold(lobby, [start.model_copy(update={"payload": {"rules": loose}})])
     assert replayed.rules is not None and replayed.rules.card_value_cents == 50_000
+
+
+class TestGuests:
+    def _lobby_with_guest(self, now):
+        A, G = uuid4(), uuid4()
+        state = RoomState.new(room_id=uuid4(), host_id=A, host_display_name="Alice", now=now)
+        state = _do(state, machine.add_guest, actor=A, guest_id=G, display_name="  Gary  ", now=now)
+        return state, A, G
+
+    def test_host_seats_a_guest(self, now):
+        state, _A, G = self._lobby_with_guest(now)
+        assert state.members[G].is_guest and state.members[G].display_name == "Gary"
+
+    def test_guest_names_must_be_distinct_and_sensible(self, now):
+        state, A, _G = self._lobby_with_guest(now)
+        for name in ("gary", "", "x" * 41):
+            with pytest.raises(IllegalTransition):
+                machine.add_guest(
+                    state,
+                    expected_seq=state.seq,
+                    actor=A,
+                    guest_id=uuid4(),
+                    display_name=name,
+                    now=now,
+                )
+
+    def test_only_the_host_seats_or_removes_guests(self, now):
+        state, _A, G = self._lobby_with_guest(now)
+        B = uuid4()
+        state = _do(state, machine.join_player, player_id=B, display_name="Bob", now=now)
+        with pytest.raises(NotAuthorized):
+            machine.add_guest(
+                state, expected_seq=state.seq, actor=B, guest_id=uuid4(), display_name="X", now=now
+            )
+        with pytest.raises(NotAuthorized):
+            machine.remove_guest(state, expected_seq=state.seq, actor=B, guest_id=G, now=now)
+
+    def test_remove_only_removes_guests(self, now):
+        state, A, G = self._lobby_with_guest(now)
+        with pytest.raises(IllegalTransition):
+            machine.remove_guest(state, expected_seq=state.seq, actor=A, guest_id=A, now=now)
+        state = _do(state, machine.remove_guest, actor=A, guest_id=G, now=now)
+        assert G not in state.members and G not in state.balances
+
+    def test_the_host_role_passes_to_an_account_not_a_guest(self, now):
+        state, A, G = self._lobby_with_guest(now)
+        B = uuid4()
+        state = _do(state, machine.join_player, player_id=B, display_name="Bob", now=now)
+        assert state.members[G].seat < state.members[B].seat
+        state = _do(state, machine.start_game, actor=A, rules=GameRules(), now=now)
+        state = _do(state, machine.step_out, actor=A, now=now)
+        assert state.host_id == B

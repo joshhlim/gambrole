@@ -9,4 +9,6 @@ export const debtsApi = {
     post<DebtActionResult>(`/debts/${settlementId}/mark-paid`),
   approve: (settlementId: string) => post<DebtActionResult>(`/debts/${settlementId}/approve`),
   reject: (settlementId: string) => post<DebtActionResult>(`/debts/${settlementId}/reject`),
+  /** Guest counterparties only — either side, one step, straight to approved. */
+  settle: (settlementId: string) => post<DebtActionResult>(`/debts/${settlementId}/settle`),
 };

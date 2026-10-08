@@ -37,7 +37,7 @@ test("stats dashboard reflects a finished Taidi game and a finished Mahjong game
     });
 
     // --- Mahjong: Alice HUs directly off Bob (seat 1) at 1 tai against the
-    // default "3/6 半" table (hu(1)=4) -> Bob pays Alice 4 chips.
+    // default "3/6 半" table (hu(1)=$2.00) -> Bob pays Alice $2.00.
     await openNewRoom(alice, "mahjong");
     const mjInvite = await submitNewRoom(alice);
 
@@ -54,7 +54,7 @@ test("stats dashboard reflects a finished Taidi game and a finished Mahjong game
     await alice.getByTestId("confirm-end-btn").click();
     await expect(alice.getByTestId("game-over")).toBeVisible({ timeout: 10_000 });
 
-    // --- Stats: 60 cents (taidi) + 4 chips * 50 cents/chip (mahjong) = $2.60.
+    // --- Stats: $0.60 (taidi) + $2.00 (mahjong) = $2.60.
     await alice.goto("/stats");
     await expect(alice.getByTestId("overview-total")).toHaveText("$2.60", { timeout: 10_000 });
     await expect(alice.getByTestId("overview-sessions")).toHaveText("2");

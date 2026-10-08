@@ -33,11 +33,10 @@ def mahjong_rules(draw):
         for t in range(1, max_tai + 1)
     }
     return MahjongRules(
-        base_chips=draw(st.integers(min_value=0, max_value=1000)),
-        yao_chips=draw(st.integers(min_value=0, max_value=50)),
-        gang_chips=draw(st.integers(min_value=0, max_value=50)),
-        zimo_bonus_chips=draw(st.integers(min_value=0, max_value=50)),
-        klppdd_chips=draw(st.integers(min_value=0, max_value=50)),
+        yao_amount=draw(st.integers(min_value=0, max_value=50)),
+        gang_amount=draw(st.integers(min_value=0, max_value=50)),
+        zimo_bonus_amount=draw(st.integers(min_value=0, max_value=50)),
+        klppdd_amount=draw(st.integers(min_value=0, max_value=50)),
         max_tai=max_tai,
         tai_table=table,
     )
@@ -78,7 +77,7 @@ def test_yao_matches_formula(rules, actor_idx, target_idx, an):
             state, expected_seq=state.seq, actor=actor, target_seat=target_idx, an=an, now=NOW
         ),
     )
-    unit = rules.yao_chips * (2 if an else 1)
+    unit = rules.yao_amount * (2 if an else 1)
     expected_total = unit * 3 if target == actor else unit
     assert after.balances[actor] - before.balances[actor] == expected_total
     assert _others_never_gain(before, after, actor)
@@ -99,11 +98,11 @@ def test_gang_matches_formula(rules, actor_idx, target):
         machine.declare_gang(state, expected_seq=state.seq, actor=actor, target=target, now=NOW),
     )
     if target == "angang":
-        expected_total = rules.gang_chips * 2 * 3
+        expected_total = rules.gang_amount * 2 * 3
     elif SEATS[target] == actor:
-        expected_total = rules.gang_chips * 1 * 3
+        expected_total = rules.gang_amount * 1 * 3
     else:
-        expected_total = rules.gang_chips * 3
+        expected_total = rules.gang_amount * 3
     assert after.balances[actor] - before.balances[actor] == expected_total
     assert _others_never_gain(before, after, actor)
     assert after.hands[0].had_gang
@@ -213,7 +212,7 @@ def test_zimo_bonus_matches_formula(rules, actor_idx, tai_offset):
             now=NOW,
         ),
     )
-    expected = (rules.tai_table[tai].zimo + rules.zimo_bonus_chips) * 3
+    expected = (rules.tai_table[tai].zimo + rules.zimo_bonus_amount) * 3
     assert after.balances[actor] - before.balances[actor] == expected
     assert _others_never_gain(before, after, actor)
 
@@ -238,7 +237,7 @@ def test_klppdd_on_zimo_splits_three_ways(rules, actor_idx, tai_offset):
             now=NOW,
         ),
     )
-    expected = (rules.tai_table[tai].zimo + rules.klppdd_chips) * 3
+    expected = (rules.tai_table[tai].zimo + rules.klppdd_amount) * 3
     assert after.balances[actor] - before.balances[actor] == expected
     assert _others_never_gain(before, after, actor)
 
@@ -271,7 +270,7 @@ def test_klppdd_on_direct_win_paid_in_full_by_single_target(
             now=NOW,
         ),
     )
-    expected = rules.tai_table[tai].hu + rules.klppdd_chips * 3
+    expected = rules.tai_table[tai].hu + rules.klppdd_amount * 3
     assert after.balances[actor] - before.balances[actor] == expected
     assert before.balances[target] - after.balances[target] == expected
     assert _others_never_gain(before, after, actor)

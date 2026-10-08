@@ -4,9 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { request } from "@/lib/api";
 import { signOut, useStoredUser } from "@/lib/auth";
-import { friendsApi } from "@/lib/friendsApi";
 import { money } from "@/lib/format";
-import type { MyProfile } from "@/lib/friendsTypes";
+import { loadMe, setMe, useMe } from "@/lib/me";
+import { useCurrencySymbol } from "@/lib/preferences";
+import { profileHref } from "@/lib/profileApi";
+import Avatar from "./Avatar";
 
 interface Notification {
   kind: "debt_to_pay" | "debt_to_approve" | "friend_request";
@@ -98,7 +100,7 @@ function ChevronIcon() {
  *  it would crowd a 56px strip and it's already on the page you land on. */
 function Logo() {
   return (
-    <span className="flex h-8 w-8 rotate-3 items-center justify-center rounded-lg bg-brand shadow-sm shadow-brand/25">
+    <span className="flex h-8 w-8 rotate-3 items-center justify-center rounded-lg bg-tile shadow-sm shadow-black/15">
       <span className="font-display text-lg font-extrabold leading-none text-gold-bright">
         G
       </span>
@@ -113,7 +115,7 @@ function Logo() {
 const panel =
   "absolute right-5 top-13 z-20 w-60 max-w-[calc(100%-2.5rem)] overflow-hidden rounded-xl border border-border bg-surface shadow-lg";
 const item =
-  "block w-full px-4 py-2.5 text-left text-sm text-foreground hover:bg-background";
+  "block min-h-11 w-full px-4 py-3 text-left text-sm text-foreground hover:bg-background focus-visible:bg-background";
 
 /** How long a bell count is allowed to be trusted before a navigation is
  *  worth spending a request on. Long enough that moving quickly between
@@ -139,9 +141,12 @@ export default function TopBar() {
   // next person signing in on the same phone.
   const [loaded, setLoaded] = useState<{
     userId: string;
-    profile: MyProfile;
     notifications: Notification[];
   } | null>(null);
+  // Your profile is shared app-wide (lib/me.ts) — Settings updates it in
+  // place, so a new photo shows here the moment it's saved.
+  const me = useMe();
+  useCurrencySymbol();
   const [menuOpen, setMenuOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
   const fetched = useRef<{ userId: string; at: number } | null>(null);
@@ -177,7 +182,7 @@ export default function TopBar() {
   }
 
   const mine = loaded && user && loaded.userId === user.user_id ? loaded : null;
-  const profile = mine?.profile ?? null;
+  const profile = me;
   const notifications = mine?.notifications ?? [];
 
   // The bar lives in the layout and never unmounts, so unlike a per-page
@@ -195,13 +200,12 @@ export default function TopBar() {
     let cancelled = false;
     // One request for the bell rather than asking /debts and /friends
     // separately — see notifications_service.
-    Promise.all([
-      friendsApi.me(),
-      request<{ items: Notification[]; total: number }>("/notifications"),
-    ])
-      .then(([me, bell]) => {
+    // The profile refresh picks up a username changed on another device.
+    loadMe(userId, true).catch(() => {});
+    request<{ items: Notification[]; total: number }>("/notifications")
+      .then((bell) => {
         if (cancelled) return;
-        setLoaded({ userId, profile: me, notifications: bell.items });
+        setLoaded({ userId, notifications: bell.items });
       })
       .catch(() => {
         /* the page below works fine without a top bar */
@@ -265,13 +269,13 @@ export default function TopBar() {
               aria-expanded={bellOpen}
               aria-controls="bell-panel"
               aria-label={`Notifications${notifications.length ? `, ${notifications.length} pending` : ""}`}
-              className="relative flex h-10 w-10 items-center justify-center"
+              className="relative flex h-11 w-11 items-center justify-center rounded-full"
             >
               <BellIcon />
               {notifications.length > 0 && (
                 <span
                   data-testid="bell-count"
-                  className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white"
+                  className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-danger-fill px-1 text-[10px] font-bold text-on-primary"
                 >
                   {notifications.length}
                 </span>
@@ -310,8 +314,18 @@ export default function TopBar() {
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               aria-controls="account-menu"
-              className="flex h-10 items-center gap-1 pl-1 text-brand"
+              className="flex h-11 items-center gap-1.5 rounded-full pl-1 text-brand"
             >
+              {profile ? (
+                <Avatar
+                  name={profile.display_name}
+                  url={profile.avatar_url}
+                  accent={profile.accent}
+                  size={28}
+                />
+              ) : (
+                <span aria-hidden className="h-7 w-7 shrink-0 animate-pulse rounded-full bg-border" />
+              )}
               <span
                 data-testid="account-name"
                 className="max-w-28 truncate text-sm font-semibold"
@@ -331,6 +345,17 @@ export default function TopBar() {
                 data-testid="account-menu"
                 onKeyDown={onMenuKey}
               >
+                {profile && (
+                  <button
+                    onClick={() => go(profileHref(profile))}
+                    data-testid="menu-profile"
+                    role="menuitem"
+                    className={`${item} border-b border-border`}
+                  >
+                    <span className="block truncate font-semibold">{profile.display_name}</span>
+                    <span className="block text-xs text-muted">View profile</span>
+                  </button>
+                )}
                 <button
                   onClick={() => go("/stats")}
                   data-testid="menu-stats"
@@ -368,6 +393,7 @@ export default function TopBar() {
                     await signOut();
                     setMenuOpen(false);
                     setLoaded(null);
+                    setMe(null);
                     fetched.current = null;
                     // signOut announces itself (see lib/auth.ts), so this
                     // bar and the home page both drop the session on their

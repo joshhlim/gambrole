@@ -21,7 +21,9 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import friendships as friendships_table
+from .db import guests as guests_table
 from .db import settlements as settlements_table
+from .identity import identity_ids
 from .users_service import profiles_for
 
 NotificationKind = Literal["debt_to_pay", "debt_to_approve", "friend_request"]
@@ -48,15 +50,16 @@ class NotificationsResponse(BaseModel):
 
 
 async def build_notifications_for(session: AsyncSession, player_id: UUID) -> NotificationsResponse:
+    ids = await identity_ids(session, player_id)
     settlements = (
         await session.execute(
             select(settlements_table).where(
                 or_(
                     # Yours to pay.
-                    (settlements_table.c.from_player == player_id)
+                    (settlements_table.c.from_player.in_(ids))
                     & (settlements_table.c.status == "pending"),
                     # Yours to confirm you received.
-                    (settlements_table.c.to_player == player_id)
+                    (settlements_table.c.to_player.in_(ids))
                     & (settlements_table.c.status == "marked_paid"),
                 )
             )
@@ -77,21 +80,36 @@ async def build_notifications_for(session: AsyncSession, player_id: UUID) -> Not
     # everyone is in the directory now (users_service.ensure_user), and a
     # full event replay per room is far too much work for a bell.
     involved = {
-        pid for row in settlements for pid in (row.from_player, row.to_player) if pid != player_id
+        pid for row in settlements for pid in (row.from_player, row.to_player) if pid not in ids
     } | {row.requester_id for row in requests}
     # Anyone who creates or joins a room is recorded (users_service.
     # ensure_user), so a miss here means a game played before the directory
     # existed — scripts/backfill_users.py is what fills those in.
     directory = await profiles_for(session, list(involved))
+    # Guests aren't in the directory; their name is on their guests row.
+    guest_names = {
+        row.guest_id: row.display_name
+        for row in (
+            await session.execute(
+                select(guests_table.c.guest_id, guests_table.c.display_name).where(
+                    guests_table.c.guest_id.in_(involved - set(directory))
+                )
+            )
+        ).all()
+    }
+
+    def name_of(pid: UUID) -> str:
+        profile = directory.get(pid)
+        return profile.display_name if profile else guest_names.get(pid, "Someone")
 
     items: list[Notification] = []
     for row in settlements:
-        if row.from_player == player_id:
+        if row.from_player in ids:
             other = directory.get(row.to_player)
             items.append(
                 Notification(
                     kind="debt_to_pay",
-                    counterparty=other.display_name if other else "Someone",
+                    counterparty=name_of(row.to_player),
                     counterparty_username=other.username if other else None,
                     amount_cents=row.amount_cents,
                     ref_id=row.id,
@@ -102,7 +120,7 @@ async def build_notifications_for(session: AsyncSession, player_id: UUID) -> Not
             items.append(
                 Notification(
                     kind="debt_to_approve",
-                    counterparty=other.display_name if other else "Someone",
+                    counterparty=name_of(row.from_player),
                     counterparty_username=other.username if other else None,
                     amount_cents=row.amount_cents,
                     ref_id=row.id,

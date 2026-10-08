@@ -50,6 +50,21 @@ def pinned_seq(expected_seq: int, pin: int | None, current: int | None, seq: int
     return seq
 
 
+def acting_as(state: Any, user_id: UUID, as_player: UUID | None) -> UUID:
+    """Who a command is for. Normally the caller; the host may instead act
+    for a guest at the table (someone with no account, whose turns the host
+    enters on one shared phone). Anyone else asking is refused — raised as
+    NotAuthorized inside build_events, so dispatch maps it to a 403."""
+    if as_player is None or as_player == user_id:
+        return user_id
+    if user_id != state.host_id:
+        raise NotAuthorized("Only the host can act for a guest.")
+    member = state.members.get(as_player)
+    if member is None or not member.is_guest:
+        raise NotAuthorized("You can only act for a guest at this table.")
+    return as_player
+
+
 async def dispatch[S](
     session: AsyncSession,
     room_id: UUID,

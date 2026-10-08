@@ -28,7 +28,7 @@ def _ended_room(now, yao_delta=100):
             state,
             expected_seq=state.seq,
             actor=A,
-            rules=MahjongRules(yao_chips=yao_delta),
+            rules=MahjongRules(yao_amount=yao_delta),
             now=now,
         ),
     )
@@ -71,7 +71,7 @@ def _clean_tai_rules(**overrides) -> MahjongRules:
     """Round, easy-to-check payouts — not a real preset, just clean numbers
     for testing the hand-stats aggregation mechanism itself."""
     table = {1: TaiPayout(hu=100, zimo=50), 2: TaiPayout(hu=200, zimo=100)}
-    return MahjongRules(max_tai=2, tai_table=table, gang_chips=10, **overrides)
+    return MahjongRules(max_tai=2, tai_table=table, gang_amount=10, **overrides)
 
 
 def _four_hand_room(now) -> tuple[RoomState, tuple]:
@@ -190,20 +190,20 @@ def test_profit_by_kind_and_best_worst_hand(now):
     # Hand 1: B pays A 100 (HU). Hand 2: A, C, D each pay B 100 (HU, zimo).
     # Hand 3: D pays C 30 (GANG), then D pays C 100 (HU). Hand 4: no transfers.
     assert stats[A].profit_by_kind == {"hu": 0}  # +100 (hand1) - 100 (hand2)
-    assert stats[A].best_hand_chips == 100
-    assert stats[A].worst_hand_chips == -100
+    assert stats[A].best_hand_cents == 100
+    assert stats[A].worst_hand_cents == -100
 
     assert stats[B].profit_by_kind == {"hu": 200}  # -100 (hand1) + 300 (hand2)
-    assert stats[B].best_hand_chips == 300
-    assert stats[B].worst_hand_chips == -100
+    assert stats[B].best_hand_cents == 300
+    assert stats[B].worst_hand_cents == -100
 
     assert stats[C].profit_by_kind == {"hu": 0, "gang": 30}  # -100 (hand2) + 30 + 100 (hand3)
-    assert stats[C].best_hand_chips == 130
-    assert stats[C].worst_hand_chips == -100
+    assert stats[C].best_hand_cents == 130
+    assert stats[C].worst_hand_cents == -100
 
     assert stats[D].profit_by_kind == {"hu": -200, "gang": -30}
-    assert stats[D].best_hand_chips == 0
-    assert stats[D].worst_hand_chips == -130
+    assert stats[D].best_hand_cents == 0
+    assert stats[D].worst_hand_cents == -130
 
 
 _PROPERTY_TEST_NOW = datetime(2026, 9, 1, 20, 0, 0, tzinfo=UTC)

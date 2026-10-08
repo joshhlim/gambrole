@@ -58,9 +58,15 @@ async def test_start_rejected_with_fewer_than_four(make_device):
     assert r.status_code == 400
 
 
+# Amounts are cents. The arithmetic below is written in the old $0.50
+# chips (yao 2, tai(1) hu 4, ...) times CHIP, which keeps it readable and
+# doubles as a check that the 3/6 半 defaults are the same money as before.
+CHIP = 50
+
+
 async def test_yao_gang_hu_settle_correctly(make_device):
-    """Uses the default rules (the "3/6 半" preset: yao=2, gang=2, tai(1)=hu4/zimo4)
-    except yao/gang chips overridden for clearer arithmetic — the tai_table
+    """Uses the default rules (the "3/6 半" preset: yao=$1, gang=$1, tai(1)=hu/zimo $2)
+    except yao/gang set explicitly for clearer arithmetic — the tai_table
     itself is exercised by test_mahjong_rules_fixtures.py."""
     room_id, invite_code, (alice, bob, cara, dan) = await _full_table(make_device)
     state = (await alice.get(f"/rooms/{room_id}/state")).json()
@@ -69,7 +75,7 @@ async def test_yao_gang_hu_settle_correctly(make_device):
             f"/rooms/{room_id}/mahjong/start",
             json={
                 "expected_seq": state["seq"],
-                "rules": {"yao_chips": 2, "gang_chips": 2},
+                "rules": {"yao_amount": 100, "gang_amount": 100},
             },
         )
     ).json()
@@ -81,8 +87,8 @@ async def test_yao_gang_hu_settle_correctly(make_device):
     )
     assert r.status_code == 200, r.text
     state = r.json()
-    assert state["balances"][alice.user_id] == 6
-    assert state["balances"][bob.user_id] == -2
+    assert state["balances"][alice.user_id] == (6) * CHIP
+    assert state["balances"][bob.user_id] == (-2) * CHIP
 
     # Bob GANGs on Cara (seat 2): Cara alone pays 3x.
     r = await bob.post(
@@ -90,8 +96,8 @@ async def test_yao_gang_hu_settle_correctly(make_device):
     )
     assert r.status_code == 200, r.text
     state = r.json()
-    assert state["balances"][bob.user_id] == -2 + 6
-    assert state["balances"][cara.user_id] == -2 - 6  # Cara already paid Alice's YAO
+    assert state["balances"][bob.user_id] == (-2 + 6) * CHIP
+    assert state["balances"][cara.user_id] == (-2 - 6) * CHIP  # Cara already paid Alice's YAO
     assert state["hands"][0]["had_gang"] is True
 
     # Dan directly HUs off Alice (seat 0) at 1 tai: Alice pays the default
@@ -102,7 +108,7 @@ async def test_yao_gang_hu_settle_correctly(make_device):
     )
     assert r.status_code == 200, r.text
     state = r.json()
-    assert state["balances"][dan.user_id] == -2 + 4  # Dan already paid Alice's YAO
+    assert state["balances"][dan.user_id] == (-2 + 4) * CHIP  # Dan already paid Alice's YAO
     assert state["hands"][0]["closed"] is True
     # Dan (seat 3) isn't the dealer (seat 0) -> dealer rotates to seat 1 (Bob).
     assert len(state["hands"]) == 2
@@ -117,7 +123,7 @@ async def test_zimo_bonus_and_klppdd_settle_correctly(make_device):
             f"/rooms/{room_id}/mahjong/start",
             json={
                 "expected_seq": state["seq"],
-                "rules": {"zimo_bonus_chips": 5, "klppdd_chips": 10},
+                "rules": {"zimo_bonus_amount": 250, "klppdd_amount": 500},
             },
         )
     ).json()
@@ -137,8 +143,8 @@ async def test_zimo_bonus_and_klppdd_settle_correctly(make_device):
     )
     assert r.status_code == 200, r.text
     state = r.json()
-    assert state["balances"][alice.user_id] == 19 * 3
-    assert state["balances"][bob.user_id] == -19
+    assert state["balances"][alice.user_id] == (19 * 3) * CHIP
+    assert state["balances"][bob.user_id] == (-19) * CHIP
 
     # Dan HUs directly off Bob (seat 1) at 1 tai with klppdd on: Bob alone
     # pays hu(1)=4 + 3*10 klppdd = 34.
@@ -154,8 +160,8 @@ async def test_zimo_bonus_and_klppdd_settle_correctly(make_device):
     )
     assert r.status_code == 200, r.text
     state = r.json()
-    assert state["balances"][dan.user_id] == -19 + 34
-    assert state["balances"][bob.user_id] == -19 - 34
+    assert state["balances"][dan.user_id] == (-19 + 34) * CHIP
+    assert state["balances"][bob.user_id] == (-19 - 34) * CHIP
 
 
 async def test_zimo_bonus_rejected_on_direct_win(make_device):
@@ -164,7 +170,7 @@ async def test_zimo_bonus_rejected_on_direct_win(make_device):
     state = (
         await alice.post(
             f"/rooms/{room_id}/mahjong/start",
-            json={"expected_seq": state["seq"], "rules": {"zimo_bonus_chips": 5}},
+            json={"expected_seq": state["seq"], "rules": {"zimo_bonus_amount": 250}},
         )
     ).json()
 

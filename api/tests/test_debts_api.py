@@ -71,7 +71,7 @@ async def test_disbanded_room_creates_no_settlement(make_device):
     assert a["owing"] == [] and a["owed"] == []
 
 
-async def test_mahjong_settlement_converts_chips_to_cents(make_device):
+async def test_mahjong_settlement_is_in_cents(make_device):
     alice = await make_device("Alice")
     bob = await make_device("Bob")
     cara = await make_device("Cara")
@@ -95,7 +95,7 @@ async def test_mahjong_settlement_converts_chips_to_cents(make_device):
     r = await alice.post(f"/rooms/{room_id}/mahjong/end", json={"expected_seq": state["seq"]})
     assert r.status_code == 200, r.text
 
-    # Bob (seat 1) pays Alice 4 chips at the default table -> 4 * 50 = 200 cents.
+    # Bob (seat 1) pays Alice the default table's hu(1) = $2.00.
     a = (await alice.get("/debts/me")).json()
     assert len(a["owed"]) == 1
     assert a["owed"][0]["amount_cents"] == 200

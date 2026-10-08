@@ -15,16 +15,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from mahjong_core import machine
 from mahjong_core.models import Event, MahjongRules, RoomState
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import CurrentUser, get_current_user
 from ..db import get_session
-from ..dispatch import dispatch, pinned_seq
+from ..dispatch import acting_as, dispatch, pinned_seq
 from ..events_store import (
     AlreadyInActiveRoom,
     RoomMeta,
@@ -34,6 +35,7 @@ from ..events_store import (
     load_room,
 )
 from ..schemas import (
+    AddGuestRequest,
     AssignSeatsRequest,
     DeclareGangRequest,
     DeclareHuRequest,
@@ -163,7 +165,16 @@ async def start(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     _state, meta = await _load_mahjong(session, room_id)
-    rules = body.rules or draft_rules_or_default(MahjongRules, meta)
+    if body.rules is None:
+        rules = draft_rules_or_default(MahjongRules, meta)
+    else:
+        try:
+            rules = MahjongRules.from_stored(body.rules)
+        except ValidationError as e:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                [{"loc": ["body", "rules", *err["loc"]], "msg": err["msg"]} for err in e.errors()],
+            ) from e
     return await _dispatch(
         session,
         room_id,
@@ -190,7 +201,7 @@ async def yao(
         lambda state: machine.declare_yao(
             state,
             expected_seq=_hand_seq(state, body.expected_seq, body.hand_no),
-            actor=user.user_id,
+            actor=acting_as(state, user.user_id, body.as_player),
             target_seat=body.target_seat,
             an=body.an,
             now=utcnow(),
@@ -211,7 +222,7 @@ async def gang(
         lambda state: machine.declare_gang(
             state,
             expected_seq=_hand_seq(state, body.expected_seq, body.hand_no),
-            actor=user.user_id,
+            actor=acting_as(state, user.user_id, body.as_player),
             target=body.target,
             now=utcnow(),
         ),
@@ -231,7 +242,7 @@ async def hu(
         lambda state: machine.declare_hu(
             state,
             expected_seq=_hand_seq(state, body.expected_seq, body.hand_no),
-            actor=user.user_id,
+            actor=acting_as(state, user.user_id, body.as_player),
             mode=body.mode,
             target_seat=body.target_seat,
             tai=body.tai,
@@ -255,7 +266,7 @@ async def no_win(
         lambda state: machine.declare_no_win(
             state,
             expected_seq=_hand_seq(state, body.expected_seq, body.hand_no),
-            actor=user.user_id,
+            actor=acting_as(state, user.user_id, body.as_player),
             now=utcnow(),
         ),
     )
@@ -292,5 +303,47 @@ async def end(
         room_id,
         lambda state: machine.end_game(
             state, expected_seq=body.expected_seq, actor=user.user_id, now=utcnow()
+        ),
+    )
+
+
+@router.post("/guests")
+async def add_guest(
+    room_id: UUID,
+    body: AddGuestRequest,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    return await _dispatch(
+        session,
+        room_id,
+        lambda state: machine.add_guest(
+            state,
+            expected_seq=body.expected_seq,
+            actor=user.user_id,
+            guest_id=uuid4(),
+            display_name=body.display_name,
+            now=utcnow(),
+        ),
+    )
+
+
+@router.post("/guests/{guest_id}/remove")
+async def remove_guest(
+    room_id: UUID,
+    guest_id: UUID,
+    body: SeqOnlyRequest,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    return await _dispatch(
+        session,
+        room_id,
+        lambda state: machine.remove_guest(
+            state,
+            expected_seq=body.expected_seq,
+            actor=user.user_id,
+            guest_id=guest_id,
+            now=utcnow(),
         ),
     )

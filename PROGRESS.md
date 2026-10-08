@@ -232,6 +232,17 @@ again later without touching history.
   screens are unchanged — `web/src/lib/auth.ts`/`account.ts` route to
   `/auth/local/*` (api/app/routers/local_auth.py) when local. Reset links
   go to the API log. Not currently switched on anywhere.
+- Strangers-ready pass (2026-10-01): Mahjong in dollars (cents_per_unit,
+  legacy chips replay ×50), guest players + claim links (identity.py maps
+  claimed guests onto accounts everywhere a player's history is read),
+  groups (group_service.py), profiles/preferences/privacy
+  (profile_service.py, signed avatar URLs — set TAIDI_ASSET_SECRET on
+  Render), dark mode, first-run walkthrough. Decisions the user made: guests
+  are run from the host's phone and claimable later; presets keep the same
+  money at $0.50/chip; profile = photo, bio, accent, city, public page;
+  settings = theme, default rules, privacy, currency symbol. Next on the
+  app-store roadmap (not started): Capacitor wrapper, push notifications,
+  in-app account deletion, legal pages, paid hosting, error reporting.
 - Deliberately not done in the audit pass: lazy-loading supabase-js (the
   password-recovery listener needs the client at module load), Sentry-style
   error reporting (needs an account), API versioning.

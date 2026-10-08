@@ -2,13 +2,26 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { chips } from "@/lib/format";
+import { money } from "@/lib/format";
+import { guestsApi } from "@/lib/guestsApi";
 import { mahjongApi } from "@/lib/mahjongApi";
 import { describeMahjongRules } from "@/lib/rulesSummary";
 import { SEAT_LABELS, type HandState, type MahjongRoomState } from "@/lib/mahjongTypes";
 import type { AnyRoomState, Member } from "@/lib/types";
 import { useRoom, type RunOptions } from "./useRoom";
-import { ConfirmAction, RoomFrame, RoomLoading, RoomProblem, RulesLine } from "./RoomShell";
+import {
+  ConfirmAction,
+  PlayerLabel,
+  RoomFrame,
+  RoomLoading,
+  RoomProblem,
+  RulesLine,
+  useRoomProfiles,
+} from "./RoomShell";
+import { useCurrencySymbol } from "@/lib/preferences";
+import type { UserProfile } from "@/lib/friendsTypes";
+import Avatar from "@/components/Avatar";
+import { ActingAs, AddGuestForm, GuestLinks, GuestTag } from "./Guests";
 
 function seatLabel(seat: number) {
   return SEAT_LABELS[seat];
@@ -56,6 +69,8 @@ export default function MahjongRoom({
     () => (state ? Object.values(state.members).sort((a, b) => a.seat - b.seat) : []),
     [state],
   );
+  const profiles = useRoomProfiles(state);
+  useCurrencySymbol();
 
   if (problem === "not-found" || problem === "forbidden") return <RoomProblem kind={problem} />;
   if (!state) return <RoomLoading offline={problem === "offline"} />;
@@ -64,7 +79,12 @@ export default function MahjongRoom({
   const rules = state.rules ?? state.draft_rules;
 
   return (
-    <RoomFrame offline={problem === "offline"} banner={banner} blockedBy={blockedBy}>
+    <RoomFrame
+      offline={problem === "offline"}
+      banner={banner}
+      blockedBy={blockedBy}
+      groupId={state.group_id}
+    >
       {state.status === "lobby" && (
         <Lobby
           state={state}
@@ -72,6 +92,7 @@ export default function MahjongRoom({
           isMember={isMember}
           canJoin={!blockedBy}
           membersBySeat={membersBySeat}
+          profiles={profiles}
           busy={busy}
           rulesText={rules ? describeMahjongRules(rules) : null}
           onJoin={() => run(() => mahjongApi.join(roomId))}
@@ -87,6 +108,12 @@ export default function MahjongRoom({
             )
           }
           onSwapSeats={(seatMap) => run((s) => mahjongApi.assignSeats(roomId, s.seq, seatMap))}
+          onAddGuest={(name) =>
+            run((s) => guestsApi.add<MahjongRoomState>(roomId, "mahjong", s.seq, name)).then((r) => !!r)
+          }
+          onRemoveGuest={(id) =>
+            run((s) => guestsApi.remove<MahjongRoomState>(roomId, "mahjong", s.seq, id))
+          }
         />
       )}
 
@@ -99,15 +126,15 @@ export default function MahjongRoom({
           busy={busy}
           run={run}
           roomId={roomId}
+          profiles={profiles}
         />
       )}
 
       {state.status === "ended" && (
-        <EndedView
-          state={state}
-          nameOf={nameOf}
-          onHome={() => router.push("/")}
-        />
+        <div className="space-y-6">
+          <EndedView state={state} nameOf={nameOf} profiles={profiles} onHome={() => router.push("/")} />
+          {isHost && <GuestLinks roomId={roomId} />}
+        </div>
       )}
     </RoomFrame>
   );
@@ -119,6 +146,7 @@ function Lobby({
   isMember,
   canJoin,
   membersBySeat,
+  profiles,
   busy,
   rulesText,
   onJoin,
@@ -126,12 +154,15 @@ function Lobby({
   onLeave,
   onDisband,
   onSwapSeats,
+  onAddGuest,
+  onRemoveGuest,
 }: {
   state: MahjongRoomState;
   isHost: boolean;
   isMember: boolean;
   canJoin: boolean;
   membersBySeat: Member[];
+  profiles: Record<string, UserProfile>;
   busy: boolean;
   rulesText: string | null;
   onJoin: () => void;
@@ -139,6 +170,8 @@ function Lobby({
   onLeave: () => void;
   onDisband: () => void;
   onSwapSeats: (seatMap: Record<string, number>) => void;
+  onAddGuest: (name: string) => Promise<boolean>;
+  onRemoveGuest: (guestId: string) => void;
 }) {
   const [confirmDisband, setConfirmDisband] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
@@ -178,29 +211,53 @@ function Lobby({
         <div className="space-y-2">
           {membersBySeat.map((m) => {
             const label = seatLabel(m.seat);
+            // Remove sits beside the seat button, not inside it: a button
+            // can't hold another, and a swap tap mustn't remove anyone.
             return (
-              <button
+              <div
                 key={m.player_id}
-                type="button"
-                onClick={() => tapSeat(m.player_id)}
-                disabled={!canRearrange || busy}
-                data-testid="lobby-member"
-                data-seat={m.seat}
-                className={`w-full flex items-center gap-3 rounded-xl border px-4 py-3 text-sm font-medium text-left ${
-                  picked === m.player_id ? "border-brand-strong bg-[#FFF8E1]" : "border-border bg-surface"
+                className={`flex items-center rounded-xl border ${
+                  picked === m.player_id ? "border-brand-strong bg-highlight" : "border-border bg-surface"
                 }`}
               >
-                <span className="text-xs font-bold text-brand w-10 shrink-0">
-                  {label.han} {label.pinyin}
-                </span>
-                <span className="flex-1">{m.display_name}</span>
-                {m.player_id === state.host_id && (
-                  <span className="text-xs font-semibold text-gold-text">HOST</span>
+                <button
+                  type="button"
+                  onClick={() => tapSeat(m.player_id)}
+                  disabled={!canRearrange || busy}
+                  data-testid="lobby-member"
+                  data-seat={m.seat}
+                  data-player={m.display_name}
+                  className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left text-sm font-medium"
+                >
+                  <span className="text-xs font-bold text-brand w-10 shrink-0">
+                    {label.han} {label.pinyin}
+                  </span>
+                  <PlayerLabel playerId={m.player_id} name={m.display_name} profile={profiles[m.player_id]} />
+                  {m.player_id === state.host_id && (
+                    <span className="text-xs font-semibold text-gold-text">HOST</span>
+                  )}
+                  {m.is_guest && <GuestTag />}
+                </button>
+                {m.is_guest && isHost && (
+                  <button
+                    type="button"
+                    onClick={() => onRemoveGuest(m.player_id)}
+                    disabled={busy}
+                    data-testid="remove-guest-btn"
+                    className="shrink-0 py-3 pl-1 pr-4 text-xs font-semibold text-muted disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
                 )}
-              </button>
+              </div>
             );
           })}
         </div>
+        {isHost && isMember && membersBySeat.length < 4 && (
+          <div className="mt-3">
+            <AddGuestForm busy={busy} onAdd={onAddGuest} />
+          </div>
+        )}
       </div>
 
       {!isMember ? (
@@ -210,7 +267,7 @@ function Lobby({
             onClick={onJoin}
             disabled={busy || membersBySeat.length >= 4}
             data-testid="lobby-join-btn"
-            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             Join Room
           </button>
@@ -221,7 +278,7 @@ function Lobby({
             onClick={onStart}
             disabled={busy || membersBySeat.length !== 4}
             data-testid="start-game-btn"
-            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             {membersBySeat.length !== 4 ? "Waiting for 4 players…" : "Start Game"}
           </button>
@@ -231,7 +288,7 @@ function Lobby({
                 onClick={onDisband}
                 disabled={busy}
                 data-testid="confirm-disband-btn"
-                className="flex-1 rounded-xl bg-danger py-2.5 text-xs font-semibold text-white disabled:opacity-50"
+                className="flex-1 rounded-xl bg-danger-fill py-2.5 text-xs font-semibold text-on-primary disabled:opacity-50"
               >
                 Close for everyone
               </button>
@@ -281,6 +338,7 @@ function TableView({
   busy,
   run,
   roomId,
+  profiles,
 }: {
   state: MahjongRoomState;
   me: string;
@@ -289,6 +347,7 @@ function TableView({
   busy: boolean;
   run: Run;
   roomId: string;
+  profiles: Record<string, UserProfile>;
 }) {
   // A flow belongs to the hand it was opened on: its submit is pinned to
   // that hand, and it closes by itself once the table has moved past it —
@@ -298,6 +357,12 @@ function TableView({
   const action = opened && opened.handNo === hand?.hand_no ? opened.kind : null;
   const flowHand = opened?.handNo ?? 0;
   const openFlow = (kind: Action) => hand && setOpened({ kind, handNo: hand.hand_no });
+  // Whose turn the host is entering (see ActingAs); null is the host. Only
+  // ever a guest still at the table — anything else falls back to you.
+  const [actorPick, setActorPick] = useState<string | null>(null);
+  const guests = isHost ? Object.values(state.members).filter((m) => m.is_guest) : [];
+  const actor = actorPick && state.members[actorPick]?.is_guest && isHost ? actorPick : me;
+  const asPlayer = actor === me ? undefined : actor;
   const mySeat = state.members[me]?.seat ?? 0;
   const seatsFromMe = [0, 1, 2, 3].map((i) => (mySeat + i) % 4);
   const bySeat = useMemo(() => {
@@ -308,6 +373,14 @@ function TableView({
 
   function reset() {
     setOpened(null);
+  }
+
+  // A finished declaration hands the picker back to the host, so the next
+  // one can't land on a guest by accident.
+  function finish(r: MahjongRoomState | null) {
+    if (!r) return;
+    reset();
+    setActorPick(null);
   }
 
   if (state.pending_wind_decision) {
@@ -342,7 +415,6 @@ function TableView({
             if (!m) return null;
             const label = seatLabel(seat);
             const net = state.balances[m.player_id] ?? 0;
-            const stack = (state.rules?.base_chips ?? 0) + net;
             const isDealer = seat === hand.dealer_seat;
             return (
               <div
@@ -352,12 +424,18 @@ function TableView({
                 data-player={m.display_name}
                 data-dealer={isDealer}
                 className={`flex aspect-square w-full max-w-28 min-w-0 flex-col items-center justify-center gap-0.5 rounded-2xl border px-1.5 text-center text-xs ${
-                  isDealer ? "border-gold bg-[#FFF8E1]" : "border-border bg-surface"
+                  isDealer ? "border-gold bg-highlight" : "border-border bg-surface"
                 }`}
               >
                 <span className="text-xs font-bold text-brand">
                   {label.han} {label.pinyin}
                 </span>
+                <Avatar
+                  name={m.display_name}
+                  url={profiles[m.player_id]?.avatar_url}
+                  accent={profiles[m.player_id]?.accent}
+                  size={22}
+                />
                 <span className="flex max-w-full items-baseline gap-1">
                   <span className="truncate font-medium">{m.display_name}</span>
                   {m.player_id === me && (
@@ -368,7 +446,7 @@ function TableView({
                   data-testid="standing-amount"
                   className={`text-sm font-bold ${net < 0 ? "text-danger" : "text-brand-strong"}`}
                 >
-                  {chips(stack)}
+                  {money(net)}
                 </span>
               </div>
             );
@@ -380,7 +458,7 @@ function TableView({
             data-wind={hand.wind}
             data-dealer-seat={hand.dealer_seat}
             data-hand={hand.hand_no}
-            className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-gold bg-[#FFF8E1] min-[390px]:h-16 min-[390px]:w-16"
+            className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-gold bg-highlight min-[390px]:h-16 min-[390px]:w-16"
           >
             <span className="text-lg font-extrabold text-brand">
               {seatLabel((hand.wind - 1) % 4).han}
@@ -395,11 +473,14 @@ function TableView({
       {/* Watching without a seat: the table, but nothing to press. */}
       {isMember && action === null && (
         <div className="space-y-3">
+          {guests.length > 0 && (
+            <ActingAs me={me} guests={guests} actor={actor} onPick={setActorPick} />
+          )}
           <button
             onClick={() => openFlow("yao")}
             disabled={busy}
             data-testid="yao-btn"
-            className="w-full rounded-xl bg-brand py-4 text-base font-bold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-4 text-base font-bold text-on-primary disabled:opacity-50"
           >
             咬 YAO
           </button>
@@ -407,7 +488,7 @@ function TableView({
             onClick={() => openFlow("gang")}
             disabled={busy}
             data-testid="gang-btn"
-            className="w-full rounded-xl bg-brand py-4 text-base font-bold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-4 text-base font-bold text-on-primary disabled:opacity-50"
           >
             槓 GANG
           </button>
@@ -415,7 +496,7 @@ function TableView({
             onClick={() => openFlow("hu")}
             disabled={busy}
             data-testid="hu-btn"
-            className="w-full rounded-xl bg-brand py-4 text-base font-bold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-4 text-base font-bold text-on-primary disabled:opacity-50"
           >
             胡了 HU LE
           </button>
@@ -446,16 +527,24 @@ function TableView({
         </div>
       )}
 
+      {isMember && action !== null && asPlayer && (
+        <p data-testid="flow-actor" className="text-center text-xs font-semibold text-brand">
+          For {state.members[asPlayer]?.display_name}
+        </p>
+      )}
+
+      {/* The flows read "you" as whoever the turn is for — the host, or the
+          guest they're entering it for. */}
       {isMember && action === "yao" && (
         <YaoFlow
-          me={me}
+          me={actor}
           bySeat={bySeat}
           busy={busy}
           onCancel={reset}
           onSubmit={(targetSeat, an) =>
-            run((s) => mahjongApi.declareYao(roomId, s.seq, flowHand, targetSeat, an), {
+            run((s) => mahjongApi.declareYao(roomId, s.seq, flowHand, targetSeat, an, asPlayer), {
               pinned: true,
-            }).then((r) => r && reset())
+            }).then(finish)
           }
         />
       )}
@@ -466,16 +555,16 @@ function TableView({
           busy={busy}
           onCancel={reset}
           onSubmit={(target) =>
-            run((s) => mahjongApi.declareGang(roomId, s.seq, flowHand, target), {
+            run((s) => mahjongApi.declareGang(roomId, s.seq, flowHand, target, asPlayer), {
               pinned: true,
-            }).then((r) => r && reset())
+            }).then(finish)
           }
         />
       )}
 
       {isMember && action === "hu" && (
         <HuFlow
-          me={me}
+          me={actor}
           bySeat={bySeat}
           busy={busy}
           maxTai={state.rules?.max_tai ?? 10}
@@ -492,9 +581,10 @@ function TableView({
                   tai,
                   zimoBonus,
                   klppdd,
+                  asPlayer,
                 ),
               { pinned: true },
-            ).then((r) => r && reset())
+            ).then(finish)
           }
         />
       )}
@@ -588,7 +678,7 @@ function YaoFlow({
           onClick={() => onSubmit(targetSeat, false)}
           disabled={busy}
           data-testid="yao-ming-btn"
-          className="rounded-xl bg-brand py-4 text-sm font-bold text-white disabled:opacity-50"
+          className="rounded-xl bg-primary py-4 text-sm font-bold text-on-primary disabled:opacity-50"
         >
           咬 YAO
         </button>
@@ -596,7 +686,7 @@ function YaoFlow({
           onClick={() => onSubmit(targetSeat, true)}
           disabled={busy}
           data-testid="yao-an-btn"
-          className="rounded-xl bg-brand-strong py-4 text-sm font-bold text-white disabled:opacity-50"
+          className="rounded-xl bg-primary-strong py-4 text-sm font-bold text-on-primary disabled:opacity-50"
         >
           暗咬 ANYAO
         </button>
@@ -746,7 +836,7 @@ function HuFlow({
             data-testid="zimo-bonus-toggle"
             aria-pressed={zimoBonus}
             className={`w-full rounded-xl border px-3 py-2.5 text-sm font-semibold ${
-              zimoBonus ? "border-brand-strong bg-[#FFF8E1] text-brand" : "border-border bg-surface text-muted"
+              zimoBonus ? "border-brand-strong bg-highlight text-brand" : "border-border bg-surface text-muted"
             }`}
           >
             Zimo bonus{zimoBonus ? " ✓" : ""}
@@ -758,7 +848,7 @@ function HuFlow({
           data-testid="klppdd-toggle"
           aria-pressed={klppdd}
           className={`w-full rounded-xl border px-3 py-2.5 text-sm font-semibold ${
-            klppdd ? "border-brand-strong bg-[#FFF8E1] text-brand" : "border-border bg-surface text-muted"
+            klppdd ? "border-brand-strong bg-highlight text-brand" : "border-border bg-surface text-muted"
           }`}
         >
           KLPPDD{klppdd ? " ✓" : ""}
@@ -768,7 +858,7 @@ function HuFlow({
         onClick={() => onSubmit(mode, targetSeat, tai, zimoBonus, klppdd)}
         disabled={busy}
         data-testid="confirm-hu-btn"
-        className="w-full rounded-xl bg-brand py-4 text-base font-bold text-white disabled:opacity-50"
+        className="w-full rounded-xl bg-primary py-4 text-base font-bold text-on-primary disabled:opacity-50"
       >
         胡了 Confirm
       </button>
@@ -799,7 +889,7 @@ function WindDecisionView({
             onClick={onContinue}
             disabled={busy}
             data-testid="continue-wind-btn"
-            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             Continue
           </button>
@@ -823,13 +913,14 @@ function WindDecisionView({
 function EndedView({
   state,
   nameOf,
+  profiles,
   onHome,
 }: {
   state: MahjongRoomState;
   nameOf: (id: string) => string;
+  profiles: Record<string, UserProfile>;
   onHome: () => void;
 }) {
-  const baseChips = state.rules?.base_chips ?? 0;
   const standings = Object.entries(state.balances).sort(([, a], [, b]) => b - a);
   const [topId, topNet] = standings[0] ?? [null, 0];
 
@@ -847,7 +938,7 @@ function EndedView({
       {topId && (
         <p className="text-center text-sm text-muted">
           <span className="font-semibold text-foreground">{nameOf(topId)}</span> wins with{" "}
-          <span className="font-bold text-brand-strong">{chips(baseChips + topNet)}</span> chips
+          <span className="font-bold text-brand-strong">{money(topNet)}</span>
         </p>
       )}
 
@@ -857,16 +948,16 @@ function EndedView({
             key={playerId}
             data-testid="standing-row"
             data-player={nameOf(playerId)}
-            className={`flex items-center justify-between rounded-xl border px-4 py-3 text-sm ${
-              idx === 0 ? "border-gold bg-[#FFF8E1]" : "border-border bg-surface"
+            className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-sm ${
+              idx === 0 ? "border-gold bg-highlight" : "border-border bg-surface"
             }`}
           >
-            <span className="font-medium">{nameOf(playerId)}</span>
+            <PlayerLabel playerId={playerId} name={nameOf(playerId)} profile={profiles[playerId]} link />
             <span
               data-testid="standing-amount"
-              className={`font-bold ${net < 0 ? "text-danger" : "text-brand-strong"}`}
+              className={`shrink-0 font-bold tabular ${net < 0 ? "text-danger" : "text-brand-strong"}`}
             >
-              {chips(baseChips + net)}
+              {money(net)}
             </span>
           </div>
         ))}
@@ -874,7 +965,7 @@ function EndedView({
       <button
         onClick={onHome}
         data-testid="back-to-home-btn"
-        className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white"
+        className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary"
       >
         Back to Home
       </button>

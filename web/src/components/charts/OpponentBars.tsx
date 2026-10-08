@@ -71,7 +71,7 @@ export default function OpponentBars({
               data-testid={`opponent-row-${r.opponent.player_id}`}
               onClick={() => onToggle?.(r.opponent.player_id)}
               className={`block w-full rounded-lg px-1.5 py-1 text-left ${
-                isSel ? "bg-[#FFF8E1]" : ""
+                isSel ? "bg-highlight" : ""
               }`}
               {...bind(i)}
             >

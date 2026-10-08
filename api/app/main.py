@@ -14,13 +14,17 @@ from sqlalchemy import text
 
 from .config import settings
 from .db import engine
+from .profile_service import MAX_AVATAR_BYTES
 from .routers import auth as auth_router
 from .routers import debts as debts_router
 from .routers import friends as friends_router
+from .routers import groups as groups_router
+from .routers import guests as guests_router
 from .routers import history as history_router
 from .routers import local_auth as local_auth_router
 from .routers import mahjong as mahjong_router
 from .routers import notifications as notifications_router
+from .routers import profile as profile_router
 from .routers import rooms as rooms_router
 from .routers import stats as stats_router
 
@@ -59,8 +63,10 @@ app.add_middleware(
 async def limit_body_size(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
+    # A profile photo is the one body allowed to be bigger (still capped).
+    limit = MAX_AVATAR_BYTES if request.url.path == "/users/me/avatar" else MAX_BODY_BYTES
     length = request.headers.get("content-length")
-    if length is not None and length.isdigit() and int(length) > MAX_BODY_BYTES:
+    if length is not None and length.isdigit() and int(length) > limit:
         return JSONResponse({"detail": "Request body too large."}, status_code=413)
     return await call_next(request)
 
@@ -72,7 +78,10 @@ app.include_router(mahjong_router.router)
 app.include_router(stats_router.router)
 app.include_router(debts_router.router)
 app.include_router(friends_router.router)
+app.include_router(groups_router.router)
+app.include_router(guests_router.router)
 app.include_router(notifications_router.router)
+app.include_router(profile_router.router)
 app.include_router(history_router.router)
 
 

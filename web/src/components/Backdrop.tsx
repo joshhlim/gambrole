@@ -5,7 +5,8 @@
  * Mounted once in the root layout, outside the page-transition wrapper: it
  * should sit still while pages slide across it, not travel with them.
  *
- * Three blurred pools in the brand palette, drifting on long offset cycles
+ * Three blurred pools in the brand palette (quieter in dark — see the
+ * --blob-* tokens), drifting on long offset cycles
  * so they never visibly loop. Transform and opacity only — it stays on the
  * compositor and costs a phone nothing — and it sits behind everything with
  * pointer events off, so it can't interfere with anything tappable.
@@ -20,7 +21,7 @@ export default function Backdrop() {
           left: "-18%",
           width: "70vw",
           height: "70vw",
-          background: "radial-gradient(circle, rgba(30,107,79,0.30), transparent 68%)",
+          background: "radial-gradient(circle, var(--blob-a), transparent 68%)",
         }}
       />
       <div
@@ -30,7 +31,7 @@ export default function Backdrop() {
           right: "-16%",
           width: "78vw",
           height: "78vw",
-          background: "radial-gradient(circle, rgba(217,180,74,0.32), transparent 68%)",
+          background: "radial-gradient(circle, var(--blob-b), transparent 68%)",
         }}
       />
       <div
@@ -40,7 +41,7 @@ export default function Backdrop() {
           right: "-28%",
           width: "58vw",
           height: "58vw",
-          background: "radial-gradient(circle, rgba(30,58,47,0.22), transparent 70%)",
+          background: "radial-gradient(circle, var(--blob-c), transparent 70%)",
         }}
       />
     </div>

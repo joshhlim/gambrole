@@ -33,7 +33,7 @@ export default function PlayPage() {
         <button
           onClick={() => router.push("/new")}
           data-testid="create-room-option"
-          className="w-full rounded-xl bg-brand py-4 text-sm font-semibold text-white"
+          className="w-full rounded-xl bg-primary py-4 text-sm font-semibold text-on-primary"
         >
           Create a room
         </button>

@@ -1,9 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
+import { money } from "@/lib/format";
+import { groupsApi } from "@/lib/groupsApi";
+import type { GroupSummary } from "@/lib/groupsTypes";
+import { mahjongApi } from "@/lib/mahjongApi";
 import { useStoredUser } from "@/lib/auth";
+import { setMe, useMe } from "@/lib/me";
+import { useCurrencySymbol } from "@/lib/preferences";
+import { profileApi } from "@/lib/profileApi";
 import type { AnyRoomState, GameRules, GameType } from "@/lib/types";
 import type { MahjongRules, TaiPayout } from "@/lib/mahjongTypes";
 
@@ -18,23 +25,25 @@ const DEFAULT_RULES: GameRules = {
   special_hand_cards: 5,
 };
 
-// "3/6 半" — a real Hong Kong-style stakes table. Money is chips, not
-// dollars; the tai payouts are non-linear (a 5-tai hand pays far more than
-// 5x a 1-tai hand), so this is a lookup table rather than a per-tai rate.
+// "3/6 半" — a real Hong Kong-style stakes table, in cents. The tai payouts
+// are non-linear (a 5-tai hand pays far more than 5x a 1-tai hand), so this
+// is a lookup table rather than a per-tai rate.
 const BAN_3_6_TABLE: Record<string, TaiPayout> = {
-  1: { hu: 4, zimo: 4 },
-  2: { hu: 7, zimo: 5 },
-  3: { hu: 11, zimo: 7 },
-  4: { hu: 20, zimo: 12 },
-  5: { hu: 40, zimo: 22 },
+  1: { hu: 200, zimo: 200 },
+  2: { hu: 350, zimo: 250 },
+  3: { hu: 550, zimo: 350 },
+  4: { hu: 1000, zimo: 600 },
+  5: { hu: 2000, zimo: 1100 },
 };
 
+// Always cents_per_unit 1: without it the API reads the amounts as old
+// $0.50 chips.
 const DEFAULT_MAHJONG_RULES: MahjongRules = {
-  base_chips: 300,
-  yao_chips: 2,
-  gang_chips: 2,
-  zimo_bonus_chips: 0,
-  klppdd_chips: 0,
+  cents_per_unit: 1,
+  yao_amount: 100,
+  gang_amount: 100,
+  zimo_bonus_amount: 0,
+  klppdd_amount: 0,
   max_tai: 5,
   tai_table: BAN_3_6_TABLE,
 };
@@ -42,21 +51,21 @@ const DEFAULT_MAHJONG_RULES: MahjongRules = {
 // "5/1 半" — higher stakes, more tai levels. Same non-linear-table shape
 // as "3/6 半", plus a zimo bonus and KLPPDD on by default.
 const BAN_5_1_TABLE: Record<string, TaiPayout> = {
-  1: { hu: 4, zimo: 2 },
-  2: { hu: 8, zimo: 4 },
-  3: { hu: 16, zimo: 8 },
-  4: { hu: 32, zimo: 16 },
-  5: { hu: 64, zimo: 32 },
-  6: { hu: 128, zimo: 64 },
-  7: { hu: 256, zimo: 128 },
+  1: { hu: 200, zimo: 100 },
+  2: { hu: 400, zimo: 200 },
+  3: { hu: 800, zimo: 400 },
+  4: { hu: 1600, zimo: 800 },
+  5: { hu: 3200, zimo: 1600 },
+  6: { hu: 6400, zimo: 3200 },
+  7: { hu: 12800, zimo: 6400 },
 };
 
 const HIGH_STAKES_MAHJONG_RULES: MahjongRules = {
-  base_chips: 500,
-  yao_chips: 3,
-  gang_chips: 3,
-  zimo_bonus_chips: 5,
-  klppdd_chips: 5,
+  cents_per_unit: 1,
+  yao_amount: 150,
+  gang_amount: 150,
+  zimo_bonus_amount: 250,
+  klppdd_amount: 250,
   max_tai: 7,
   tai_table: BAN_5_1_TABLE,
 };
@@ -94,17 +103,18 @@ function wholeNumber(raw: string, min: number, max: number): Check {
   return { value: n, error: null };
 }
 
-/** Dollars in, cents out: at most two decimals, $0–$100. */
-function dollarsToCents(raw: string): Check {
+/** Dollars in, cents out: at most two decimals, $0 up to maxCents. */
+function dollarsToCents(raw: string, maxCents = 10000): Check {
   const t = raw.trim();
   if (t === "") return { value: null, error: "Required" };
   if (!/^\d*(\.\d{0,2})?$/.test(t) || t === ".") return { value: null, error: "e.g. 0.20" };
   const cents = Math.round(Number(t) * 100);
-  if (cents > 10000) return { value: null, error: "Max $100.00" };
+  if (cents > maxCents) return { value: null, error: `Max ${money(maxCents)}` };
   return { value: cents, error: null };
 }
 
 const str = (n: number) => String(n);
+const dollars = (cents: number) => (cents / 100).toFixed(2);
 
 interface TaidiForm {
   cardValue: string;
@@ -117,16 +127,18 @@ interface TaidiForm {
   specialCards: string;
 }
 
-const TAIDI_FORM: TaidiForm = {
-  cardValue: (DEFAULT_RULES.card_value_cents / 100).toFixed(2),
-  baseCards: str(DEFAULT_RULES.base_cards),
-  multipliers: DEFAULT_RULES.multipliers_enabled,
-  double: str(DEFAULT_RULES.double_threshold),
-  triple: str(DEFAULT_RULES.triple_threshold),
-  difference: DEFAULT_RULES.difference_payouts,
-  specials: DEFAULT_RULES.special_hands_enabled,
-  specialCards: str(DEFAULT_RULES.special_hand_cards),
-};
+function taidiForm(r: GameRules): TaidiForm {
+  return {
+    cardValue: dollars(r.card_value_cents),
+    baseCards: str(r.base_cards),
+    multipliers: r.multipliers_enabled,
+    double: str(r.double_threshold),
+    triple: str(r.triple_threshold),
+    difference: r.difference_payouts,
+    specials: r.special_hands_enabled,
+    specialCards: str(r.special_hand_cards),
+  };
+}
 
 function checkTaidi(f: TaidiForm) {
   const errors = {
@@ -173,10 +185,12 @@ function checkTaidi(f: TaidiForm) {
   return { errors, rules };
 }
 
+// Mirror the API's caps (mahjong_core MAX_ACTION_AMOUNT, MAX_TAI_PAYOUT).
 const MAX_TAI_LIMIT = 20;
+const MAX_ACTION_CENTS = 100_000;
+const MAX_TAI_CENTS = 1_000_000;
 
 interface MahjongForm {
-  base: string;
   yao: string;
   gang: string;
   zimoBonus: string;
@@ -188,39 +202,40 @@ interface MahjongForm {
 function mahjongForm(r: MahjongRules): MahjongForm {
   const table: MahjongForm["table"] = {};
   for (const [tai, p] of Object.entries(r.tai_table)) {
-    table[tai] = { hu: str(p.hu), zimo: str(p.zimo) };
+    table[tai] = { hu: dollars(p.hu), zimo: dollars(p.zimo) };
   }
   return {
-    base: str(r.base_chips),
-    yao: str(r.yao_chips),
-    gang: str(r.gang_chips),
-    zimoBonus: str(r.zimo_bonus_chips),
-    klppdd: str(r.klppdd_chips),
+    yao: dollars(r.yao_amount),
+    gang: dollars(r.gang_amount),
+    zimoBonus: dollars(r.zimo_bonus_amount),
+    klppdd: dollars(r.klppdd_amount),
     maxTai: r.max_tai,
     table,
   };
 }
 
 function checkMahjong(f: MahjongForm) {
-  const base = wholeNumber(f.base, 0, 1_000_000);
-  const yao = wholeNumber(f.yao, 0, 100_000);
-  const gang = wholeNumber(f.gang, 0, 100_000);
-  const zimoBonus = wholeNumber(f.zimoBonus, 0, 100_000);
-  const klppdd = wholeNumber(f.klppdd, 0, 100_000);
+  const yao = dollarsToCents(f.yao, MAX_ACTION_CENTS);
+  const gang = dollarsToCents(f.gang, MAX_ACTION_CENTS);
+  const zimoBonus = dollarsToCents(f.zimoBonus, MAX_ACTION_CENTS);
+  const klppdd = dollarsToCents(f.klppdd, MAX_ACTION_CENTS);
   const rows: Record<string, { hu: Check; zimo: Check }> = {};
   for (let t = 1; t <= f.maxTai; t++) {
     const row = f.table[t] ?? { hu: "", zimo: "" };
-    rows[t] = { hu: wholeNumber(row.hu, 0, 1_000_000), zimo: wholeNumber(row.zimo, 0, 1_000_000) };
+    rows[t] = {
+      hu: dollarsToCents(row.hu, MAX_TAI_CENTS),
+      zimo: dollarsToCents(row.zimo, MAX_TAI_CENTS),
+    };
   }
-  const all = [base, yao, gang, zimoBonus, klppdd, ...Object.values(rows).flatMap((r) => [r.hu, r.zimo])];
+  const all = [yao, gang, zimoBonus, klppdd, ...Object.values(rows).flatMap((r) => [r.hu, r.zimo])];
   const valid = all.every((c) => c.error === null);
   const rules: MahjongRules | null = valid
     ? {
-        base_chips: base.value!,
-        yao_chips: yao.value!,
-        gang_chips: gang.value!,
-        zimo_bonus_chips: zimoBonus.value!,
-        klppdd_chips: klppdd.value!,
+        cents_per_unit: 1,
+        yao_amount: yao.value!,
+        gang_amount: gang.value!,
+        zimo_bonus_amount: zimoBonus.value!,
+        klppdd_amount: klppdd.value!,
         max_tai: f.maxTai,
         tai_table: Object.fromEntries(
           Object.entries(rows).map(([t, r]) => [t, { hu: r.hu.value!, zimo: r.zimo.value! }]),
@@ -229,7 +244,6 @@ function checkMahjong(f: MahjongForm) {
     : null;
   return {
     errors: {
-      base: base.error,
       yao: yao.error,
       gang: gang.error,
       zimoBonus: zimoBonus.error,
@@ -326,14 +340,119 @@ function stashFreshState(state: AnyRoomState) {
   }
 }
 
+/** useSearchParams() can't run during prerender, so the form that reads
+ * ?group= sits under a Suspense boundary and the route stays static. */
 export default function NewRoomPage() {
+  return (
+    <Suspense fallback={null}>
+      <NewRoomForm />
+    </Suspense>
+  );
+}
+
+/** Which group the game counts towards. Hidden for anyone in no groups —
+ * there's nothing to choose. */
+function GroupSelect({
+  groups,
+  value,
+  onChange,
+}: {
+  groups: GroupSummary[];
+  value: string;
+  onChange: (groupId: string) => void;
+}) {
+  if (groups.length === 0) return null;
+  return (
+    <label className="mb-5 block">
+      <span className="mb-1 block text-xs text-muted">Group</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        data-testid="group-select"
+        className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm outline-none focus:border-brand-strong"
+      >
+        <option value="">None</option>
+        {groups.map((g) => (
+          <option key={g.group_id} value={g.group_id}>
+            {g.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/** Keeps the form as it stands as your starting point for this game —
+ * /new opens on it next time, and Settings shows (and clears) it. */
+function SaveDefault({
+  game,
+  disabled,
+  note,
+  onSave,
+}: {
+  game: GameType;
+  disabled: boolean;
+  note: { text: string; error: boolean } | null;
+  onSave: () => void;
+}) {
+  return (
+    <div className="space-y-1 text-center">
+      <button
+        type="button"
+        onClick={onSave}
+        disabled={disabled}
+        data-testid={`save-default-${game}`}
+        className="min-h-11 w-full rounded-xl border border-border bg-surface text-sm font-semibold text-brand disabled:opacity-50"
+      >
+        Save as my default
+      </button>
+      {note && (
+        <p
+          role="status"
+          data-testid="save-default-note"
+          className={`text-xs ${note.error ? "text-danger" : "text-brand-strong"}`}
+        >
+          {note.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function NewRoomForm() {
   const router = useRouter();
   const { user, checked } = useStoredUser();
+  // Arriving from a group's "New game" preselects it; otherwise none.
+  const wantedGroup = useSearchParams().get("group") ?? "";
+  const [groups, setGroups] = useState<GroupSummary[]>([]);
+  const [groupId, setGroupId] = useState<string | null>(null);
+  // A stale ?group= (you've left it) quietly falls back to none.
+  const chosenGroup =
+    groupId ?? (groups.some((g) => g.group_id === wantedGroup) ? wantedGroup : "");
   const [selected, setSelected] = useState<GameId | null>(null);
-  const [taidi, setTaidi] = useState<TaidiForm>(TAIDI_FORM);
-  const [mahjong, setMahjong] = useState<MahjongForm>(() => mahjongForm(DEFAULT_MAHJONG_RULES));
+  // null until edited: the form shows your saved default for that game
+  // (Settings → Default rules), else the standard one — and since the
+  // profile may land after the first render, that's worked out on each
+  // render rather than frozen into the initial state.
+  const profile = useMe();
+  const symbol = useCurrencySymbol();
+  const savedTaidi = profile?.preferences.default_rules.taidi ?? null;
+  const savedMahjong = profile?.preferences.default_rules.mahjong ?? null;
+  const [taidiEdit, setTaidi] = useState<TaidiForm | null>(null);
+  const [mahjongEdit, setMahjong] = useState<MahjongForm | null>(null);
+  const taidi = useMemo(
+    () => taidiEdit ?? taidiForm(savedTaidi ?? DEFAULT_RULES),
+    [taidiEdit, savedTaidi],
+  );
+  const mahjong = useMemo(
+    () => mahjongEdit ?? mahjongForm(savedMahjong ?? DEFAULT_MAHJONG_RULES),
+    [mahjongEdit, savedMahjong],
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [defaultNote, setDefaultNote] = useState<{ game: GameType; text: string; error: boolean } | null>(
+    null,
+  );
 
   useEffect(() => {
     // See the matching comment in room/[roomId]/page.tsx — must wait for
@@ -342,32 +461,67 @@ export default function NewRoomPage() {
     if (checked && !user) router.replace("/");
   }, [checked, user, router]);
 
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    groupsApi
+      .list()
+      .then((r) => !cancelled && setGroups(r.groups))
+      .catch(() => {
+        /* no selector beats a broken page — the game can still be one-off */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
   const taidiCheck = useMemo(() => checkTaidi(taidi), [taidi]);
   const mahjongCheck = useMemo(() => checkMahjong(mahjong), [mahjong]);
 
   function setT<K extends keyof TaidiForm>(key: K, value: TaidiForm[K]) {
-    setTaidi((f) => ({ ...f, [key]: value }));
+    setTaidi((f) => ({ ...(f ?? taidi), [key]: value }));
   }
 
   function setM<K extends keyof MahjongForm>(key: K, value: MahjongForm[K]) {
-    setMahjong((f) => ({ ...f, [key]: value }));
+    setMahjong((f) => ({ ...(f ?? mahjong), [key]: value }));
   }
 
   function setTaiRow(tai: number, field: "hu" | "zimo", value: string) {
-    setMahjong((f) => ({
-      ...f,
-      table: { ...f.table, [tai]: { ...(f.table[tai] ?? { hu: "0", zimo: "0" }), [field]: value } },
-    }));
+    setMahjong((prev) => {
+      const f = prev ?? mahjong;
+      return {
+        ...f,
+        table: { ...f.table, [tai]: { ...(f.table[tai] ?? { hu: "0", zimo: "0" }), [field]: value } },
+      };
+    });
   }
 
   function setMaxTai(newMax: number) {
-    setMahjong((f) => {
+    setMahjong((prev) => {
+      const f = prev ?? mahjong;
       const table = { ...f.table };
       for (let t = f.maxTai + 1; t <= newMax; t++) {
         table[t] = table[t] ?? { hu: "0", zimo: "0" };
       }
       return { ...f, maxTai: newMax, table };
     });
+  }
+
+  /** Saves the form as you have it now as this game's starting point. */
+  async function saveDefault(gameType: GameType) {
+    const rules = gameType === "mahjong" ? mahjongCheck.rules : taidiCheck.rules;
+    if (!rules) return;
+    setDefaultNote(null);
+    try {
+      setMe(await profileApi.setPreferences({ default_rules: { [gameType]: rules } }));
+      setDefaultNote({ game: gameType, text: "Saved as your default.", error: false });
+    } catch (e) {
+      setDefaultNote({
+        game: gameType,
+        text: e instanceof ApiError ? e.message : "Couldn't save your default.",
+        error: true,
+      });
+    }
   }
 
   async function handleCreate(gameType: GameType) {
@@ -377,9 +531,18 @@ export default function NewRoomPage() {
     setError(null);
     let created: AnyRoomState;
     try {
-      created = await api.createRoom(gameType, rules);
+      created = await api.createRoom(gameType, rules, chosenGroup || null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Couldn't create a room.");
+      setBusy(false);
+      return;
+    }
+    // Deploy window: Vercel ships this page minutes before Render ships the
+    // API, and an old API reads these cents as $0.50 chips (50x stakes). It
+    // also echoes rules without cents_per_unit — so disband and bail.
+    if (created.game_type === "mahjong" && !("cents_per_unit" in (created.draft_rules ?? {}))) {
+      await mahjongApi.disband(created.room_id, created.seq).catch(() => {});
+      setError("Update in progress — try again in a minute.");
       setBusy(false);
       return;
     }
@@ -408,6 +571,8 @@ export default function NewRoomPage() {
         </button>
         <h1 className="text-lg font-extrabold text-brand">New Room</h1>
       </div>
+
+      <GroupSelect groups={groups} value={chosenGroup} onChange={setGroupId} />
 
       {!selected ? (
         <div className="space-y-3">
@@ -442,37 +607,54 @@ export default function NewRoomPage() {
                   key={p.label}
                   onClick={() => setMahjong(mahjongForm(p.rules))}
                   data-testid={`mahjong-preset-${p.label.toLowerCase().replace(/\s+/g, "-")}`}
-                  className="rounded-xl border border-border bg-surface px-2 py-2 text-xs font-semibold"
+                  className="min-h-11 rounded-xl border border-border bg-surface px-2 py-2 text-xs font-semibold"
                 >
                   {p.label}
                 </button>
               ))}
+              {savedMahjong && (
+                <button
+                  onClick={() => setMahjong(mahjongForm(savedMahjong))}
+                  data-testid="mahjong-preset-mine"
+                  className="min-h-11 rounded-xl border border-brand-strong bg-surface px-2 py-2 text-xs font-semibold text-brand"
+                >
+                  My default
+                </button>
+              )}
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
-            <Field label="Base chips" error={me.base}>
-              <NumberInput testId="rule-base" value={mahjong.base} error={me.base} onChange={(v) => setM("base", v)} />
-            </Field>
-            <Field label="咬 YAO" error={me.yao}>
-              <NumberInput testId="rule-yao" value={mahjong.yao} error={me.yao} onChange={(v) => setM("yao", v)} />
-            </Field>
-            <Field label="槓 GANG" error={me.gang}>
-              <NumberInput testId="rule-gang" value={mahjong.gang} error={me.gang} onChange={(v) => setM("gang", v)} />
-            </Field>
-          </div>
-
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Zimo bonus (optional)" error={me.zimoBonus}>
+            <Field label={`咬 YAO (${symbol})`} error={me.yao}>
               <NumberInput
+                decimal
+                testId="rule-yao"
+                value={mahjong.yao}
+                error={me.yao}
+                onChange={(v) => setM("yao", v)}
+              />
+            </Field>
+            <Field label={`槓 GANG (${symbol})`} error={me.gang}>
+              <NumberInput
+                decimal
+                testId="rule-gang"
+                value={mahjong.gang}
+                error={me.gang}
+                onChange={(v) => setM("gang", v)}
+              />
+            </Field>
+            <Field label={`Zimo bonus (${symbol})`} error={me.zimoBonus}>
+              <NumberInput
+                decimal
                 testId="rule-zimo-bonus"
                 value={mahjong.zimoBonus}
                 error={me.zimoBonus}
                 onChange={(v) => setM("zimoBonus", v)}
               />
             </Field>
-            <Field label="KLPPDD (optional)" error={me.klppdd}>
+            <Field label={`KLPPDD (${symbol})`} error={me.klppdd}>
               <NumberInput
+                decimal
                 testId="rule-klppdd"
                 value={mahjong.klppdd}
                 error={me.klppdd}
@@ -483,7 +665,7 @@ export default function NewRoomPage() {
 
           <div>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs text-muted">台 TAI payouts (chips)</p>
+              <p className="text-xs text-muted">台 TAI payouts ({symbol})</p>
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -520,6 +702,7 @@ export default function NewRoomPage() {
                     <div className="grid grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,1fr)] gap-2 items-center">
                       <span className="text-xs font-semibold text-brand">{tai}台</span>
                       <NumberInput
+                        decimal
                         testId={`rule-tai-${tai}-hu`}
                         label={`${tai} tai hu`}
                         value={mahjong.table[tai]?.hu ?? ""}
@@ -527,6 +710,7 @@ export default function NewRoomPage() {
                         onChange={(v) => setTaiRow(tai, "hu", v)}
                       />
                       <NumberInput
+                        decimal
                         testId={`rule-tai-${tai}-zimo`}
                         label={`${tai} tai zimo`}
                         value={mahjong.table[tai]?.zimo ?? ""}
@@ -549,15 +733,21 @@ export default function NewRoomPage() {
             onClick={() => handleCreate("mahjong")}
             disabled={busy || !mahjongCheck.rules}
             data-testid="create-room-btn"
-            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             Create Room
           </button>
+          <SaveDefault
+            game="mahjong"
+            disabled={!mahjongCheck.rules}
+            note={defaultNote?.game === "mahjong" ? defaultNote : null}
+            onSave={() => saveDefault("mahjong")}
+          />
         </div>
       ) : (
         <div className="space-y-5">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Value per card ($)" error={te.cardValue}>
+            <Field label={`Value per card (${symbol})`} error={te.cardValue}>
               <NumberInput
                 decimal
                 testId="rule-card-value"
@@ -630,10 +820,16 @@ export default function NewRoomPage() {
             onClick={() => handleCreate("taidi")}
             disabled={busy || !taidiCheck.rules}
             data-testid="create-room-btn"
-            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             Create Room
           </button>
+          <SaveDefault
+            game="taidi"
+            disabled={!taidiCheck.rules}
+            note={defaultNote?.game === "taidi" ? defaultNote : null}
+            onSave={() => saveDefault("taidi")}
+          />
         </div>
       )}
     </main>

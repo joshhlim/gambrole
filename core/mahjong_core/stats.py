@@ -101,10 +101,10 @@ def mahjong_hand_stats(rooms: list[RoomState]) -> dict[UUID, MahjongPlayerStats]
                         s.tai_distribution[hand.tai] = s.tai_distribution.get(hand.tai, 0) + 1
 
                 net = net_this_hand.get(pid, 0)
-                if s.best_hand_chips is None or net > s.best_hand_chips:
-                    s.best_hand_chips = net
-                if s.worst_hand_chips is None or net < s.worst_hand_chips:
-                    s.worst_hand_chips = net
+                if s.best_hand_cents is None or net > s.best_hand_cents:
+                    s.best_hand_cents = net
+                if s.worst_hand_cents is None or net < s.worst_hand_cents:
+                    s.worst_hand_cents = net
 
     for s in stats.values():
         s.hu_rate = s.hu_count / s.hands_played if s.hands_played else 0.0
@@ -168,10 +168,10 @@ def mahjong_session_facts(room: RoomState, player_id: UUID) -> MahjongSessionFac
                 net += t.amount_cents
         if net > 0:
             facts.profit_hands += 1
-        if facts.best_hand_chips is None or net > facts.best_hand_chips:
-            facts.best_hand_chips = net
-        if facts.worst_hand_chips is None or net < facts.worst_hand_chips:
-            facts.worst_hand_chips = net
+        if facts.best_hand_cents is None or net > facts.best_hand_cents:
+            facts.best_hand_cents = net
+        if facts.worst_hand_cents is None or net < facts.worst_hand_cents:
+            facts.worst_hand_cents = net
 
         if hand.winner == player_id:
             facts.hands_won += 1

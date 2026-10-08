@@ -1,12 +1,23 @@
 import { expect, type Browser, type Page } from "@playwright/test";
 
 /** Dev-mode sign-in. Home has no "signed in as" line any more; the Play
- * button is what only a signed-in home shows. */
-export async function login(page: Page, name: string) {
+ * button is what only a signed-in home shows. Every name here is new, so
+ * the first-run walkthrough always opens — and is skipped, since it covers
+ * home. Pass `keepOnboarding` to look at it instead. */
+export async function login(page: Page, name: string, opts: { keepOnboarding?: boolean } = {}) {
   await page.goto("/");
   await page.getByTestId("display-name-input").fill(name);
   await page.getByTestId("continue-btn").click();
   await expect(page.getByTestId("play-btn")).toBeVisible();
+  if (!opts.keepOnboarding) await skipOnboarding(page);
+}
+
+/** For a new account signed in some other way (a shared link's sign-in):
+ * the walkthrough opens on home, so go there and skip it. */
+export async function skipOnboarding(page: Page) {
+  if (new URL(page.url()).pathname !== "/") await page.goto("/");
+  await page.getByTestId("onboarding-skip").click({ timeout: 15_000 });
+  await expect(page.getByTestId("onboarding")).toBeHidden();
 }
 
 /** Home → Play → Create → the game's rules form. */

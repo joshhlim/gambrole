@@ -1,5 +1,5 @@
 import { money } from "./format";
-import type { MahjongRules } from "./mahjongTypes";
+import { ruleCents, type MahjongRules } from "./mahjongTypes";
 import type { GameRules } from "./types";
 
 // Client-side twins of the backend's GameRules.describe() and
@@ -19,15 +19,18 @@ export function describeTaidiRules(r: GameRules): string {
   return parts.join(" · ");
 }
 
-export function describeMahjongRules(r: MahjongRules): string {
+export function describeMahjongRules(r: MahjongRules): string | null {
+  // A lobby drafted before dollars still has its raw chip-named draft rules
+  // (the server converts them when the game starts) — nothing to show yet.
+  if (r.cents_per_unit === undefined) return null;
+  const m = (amount: number) => money(ruleCents(r, amount));
   const top = r.tai_table[String(r.max_tai)];
   const parts = [
-    `base ${r.base_chips}`,
-    `yao ${r.yao_chips}`,
-    `gang ${r.gang_chips}`,
-    `${r.max_tai} tai max${top ? ` (${top.hu}/${top.zimo})` : ""}`,
+    `yao ${m(r.yao_amount)}`,
+    `gang ${m(r.gang_amount)}`,
+    `${r.max_tai} tai max${top ? ` (${m(top.hu)}/${m(top.zimo)})` : ""}`,
   ];
-  if (r.zimo_bonus_chips) parts.push(`zimo bonus ${r.zimo_bonus_chips}`);
-  if (r.klppdd_chips) parts.push(`klppdd ${r.klppdd_chips}`);
+  if (r.zimo_bonus_amount) parts.push(`zimo bonus ${m(r.zimo_bonus_amount)}`);
+  if (r.klppdd_amount) parts.push(`klppdd ${m(r.klppdd_amount)}`);
   return parts.join(" · ");
 }

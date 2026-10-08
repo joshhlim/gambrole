@@ -23,9 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from taidi_core.models import Member, TaidiSessionFacts
 from taidi_core.stats import taidi_session_facts
 
-from .events_store import rebuild_many
-from .money import MAHJONG_CHIP_VALUE_CENTS
-from .stats_service import ended_room_refs
+from .stats_service import load_ended_rooms
 from .users_service import UserProfile, profiles_for
 
 
@@ -38,8 +36,7 @@ class SessionFact(BaseModel):
     room_id: UUID
     game_type: Literal["taidi", "mahjong"]
     ended_at: datetime
-    #: Always real cents, so Taidi and Mahjong sessions can be summed
-    #: together on the overview (Mahjong plays in chips — see money.py).
+    #: Real cents for both games, so sessions can be summed together.
     net_cents: int
     #: Everyone else at the table, for the "played with" filter and tallies.
     opponents: list[OpponentRef]
@@ -58,7 +55,7 @@ class StatsFactsResponse(BaseModel):
 
 
 async def build_facts_for(session: AsyncSession, player_id: UUID) -> StatsFactsResponse:
-    room_refs = await ended_room_refs(session, player_id)
+    _ids, room_refs, states = await load_ended_rooms(session, player_id)
     facts: list[SessionFact] = []
 
     def _opponents(members: dict[UUID, Member]) -> list[OpponentRef]:
@@ -68,7 +65,6 @@ async def build_facts_for(session: AsyncSession, player_id: UUID) -> StatsFactsR
             if pid != player_id
         ]
 
-    states = await rebuild_many(session, [room_id for room_id, _game_type in room_refs])
     for room_id, _game_type in room_refs:
         # A balance is the test of having played — see history_service for
         # why membership isn't (someone who stepped out mid-game keeps the
@@ -84,7 +80,7 @@ async def build_facts_for(session: AsyncSession, player_id: UUID) -> StatsFactsR
                     room_id=room_id,
                     game_type="mahjong",
                     ended_at=mj_state.ended_at,
-                    net_cents=mj_state.balances.get(player_id, 0) * MAHJONG_CHIP_VALUE_CENTS,
+                    net_cents=mj_state.balances.get(player_id, 0),
                     opponents=_opponents(mj_state.members),
                     mahjong=mahjong_session_facts(mj_state, player_id),
                 )

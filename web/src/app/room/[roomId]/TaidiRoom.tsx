@@ -4,10 +4,14 @@ import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { money } from "@/lib/format";
+import { guestsApi } from "@/lib/guestsApi";
 import { describeTaidiRules } from "@/lib/rulesSummary";
-import type { AnyRoomState, TaidiRoomState } from "@/lib/types";
+import type { AnyRoomState, Member, TaidiRoomState } from "@/lib/types";
 import { useRoom } from "./useRoom";
-import { RoomFrame, RoomLoading, RoomProblem, RulesLine } from "./RoomShell";
+import { PlayerLabel, RoomFrame, RoomLoading, RoomProblem, RulesLine, useRoomProfiles } from "./RoomShell";
+import { useCurrencySymbol } from "@/lib/preferences";
+import type { UserProfile } from "@/lib/friendsTypes";
+import { ActingAs, AddGuestForm, GuestLinks, GuestTag } from "./Guests";
 
 type RoomState = TaidiRoomState;
 
@@ -29,6 +33,8 @@ export default function TaidiRoom({
 }) {
   const router = useRouter();
   const [cardsInput, setCardsInput] = useState("");
+  // Whose turn the host is entering (see ActingAs); null is the host.
+  const [actorPick, setActorPick] = useState<string | null>(null);
   const { state, problem, isMember, isHost, busy, banner, blockedBy, run } = useRoom<RoomState>({
     roomId,
     me,
@@ -48,6 +54,9 @@ export default function TaidiRoom({
     [state],
   );
   const currentRound = state && state.rounds.length > 0 ? state.rounds[state.rounds.length - 1] : null;
+  const guests = useMemo(() => membersBySeat.filter((m) => m.is_guest), [membersBySeat]);
+  const profiles = useRoomProfiles(state);
+  useCurrencySymbol();
 
   if (problem === "not-found" || problem === "forbidden") return <RoomProblem kind={problem} />;
   if (!state) return <RoomLoading offline={problem === "offline"} />;
@@ -57,9 +66,24 @@ export default function TaidiRoom({
   const nameOf = (id: string) =>
     state.members[id]?.display_name ?? state.departed?.[id] ?? "?";
   const rules = state.rules ?? state.draft_rules;
+  // Only ever a guest still at the table, and only for the host: anything
+  // else (a guest who stepped out, a stale pick) falls back to yourself.
+  const actor = isHost && actorPick && state.members[actorPick]?.is_guest ? actorPick : me;
+  const asPlayer = actor === me ? undefined : actor;
+  // Every guest action hands the picker back to the host, so the next tap
+  // can't land on a guest by accident.
+  const done = (r: RoomState | null) => {
+    if (r) setActorPick(null);
+    return !!r;
+  };
 
   return (
-    <RoomFrame offline={problem === "offline"} banner={banner} blockedBy={blockedBy}>
+    <RoomFrame
+      offline={problem === "offline"}
+      banner={banner}
+      blockedBy={blockedBy}
+      groupId={state.group_id}
+    >
       {state.status === "lobby" && (
         <Lobby
           state={state}
@@ -67,6 +91,7 @@ export default function TaidiRoom({
           isMember={isMember}
           canJoin={!blockedBy}
           membersBySeat={membersBySeat}
+          profiles={profiles}
           busy={busy}
           rulesText={rules ? describeTaidiRules(rules) : null}
           onJoin={() => run(() => api.join(roomId))}
@@ -77,6 +102,10 @@ export default function TaidiRoom({
           onDisband={() =>
             run((s) => api.disband(roomId, s.seq), { apply: false }).then((r) => r && router.push("/"))
           }
+          onAddGuest={(name) =>
+            run((s) => guestsApi.add<RoomState>(roomId, "taidi", s.seq, name)).then((r) => !!r)
+          }
+          onRemoveGuest={(id) => run((s) => guestsApi.remove<RoomState>(roomId, "taidi", s.seq, id))}
         />
       )}
 
@@ -88,29 +117,48 @@ export default function TaidiRoom({
           currentRound={currentRound}
           standings={standings}
           nameOf={nameOf}
+          profiles={profiles}
           busy={busy}
           cardsInput={cardsInput}
           setCardsInput={setCardsInput}
+          guests={isHost ? guests : []}
+          actor={actor}
+          onPickActor={setActorPick}
           onClaimWin={() =>
-            run((s) => api.claimWin(roomId, s.seq, lastRoundNo(s)), { pinned: true })
+            run((s) => api.claimWin(roomId, s.seq, lastRoundNo(s), asPlayer), { pinned: true }).then(done)
           }
           onSubmitCards={(cards) =>
             run((s) => api.submitCards(roomId, s.seq, lastRoundNo(s), cards), { pinned: true }).then(
               (r) => r && setCardsInput(""),
             )
           }
+          onSubmitGuestCards={(guestId, cards) =>
+            run((s) => api.submitCards(roomId, s.seq, lastRoundNo(s), cards, guestId), {
+              pinned: true,
+            }).then((r) => !!r)
+          }
           isHost={isHost}
           onSpecialHand={() =>
-            run((s) => api.specialHand(roomId, s.seq, lastRoundNo(s)), { pinned: true })
+            run((s) => api.specialHand(roomId, s.seq, lastRoundNo(s), asPlayer), { pinned: true }).then(
+              done,
+            )
           }
           onVoidRound={() =>
             run((s) => api.voidLastRound(roomId, s.seq, lastRoundNo(s)), { pinned: true })
           }
           onVoidSpecial={() =>
-            run((s) => api.voidSpecialHand(roomId, s.seq, lastRoundNo(s)), { pinned: true })
+            run((s) => api.voidSpecialHand(roomId, s.seq, lastRoundNo(s), asPlayer), {
+              pinned: true,
+            }).then(done)
           }
           onStepOut={() =>
-            run((s) => api.stepOut(roomId, s.seq), { apply: false }).then((r) => r && router.push("/"))
+            // A guest stepping out leaves the host at the table; only your
+            // own exit takes you home.
+            asPlayer
+              ? run((s) => api.stepOut(roomId, s.seq, asPlayer)).then(done)
+              : run((s) => api.stepOut(roomId, s.seq), { apply: false }).then(
+                  (r) => r && router.push("/"),
+                )
           }
           onEndGame={() => run((s) => api.endGame(roomId, s.seq))}
         />
@@ -121,9 +169,11 @@ export default function TaidiRoom({
           <EndedView
             standings={standings}
             nameOf={nameOf}
+            profiles={profiles}
             roundsPlayed={state.rounds.length}
             onHome={() => router.push("/")}
           />
+          {isHost && <GuestLinks roomId={roomId} />}
           <RoundLog rounds={state.rounds} me={me} nameOf={nameOf} />
         </div>
       )}
@@ -137,24 +187,30 @@ function Lobby({
   isMember,
   canJoin,
   membersBySeat,
+  profiles,
   busy,
   rulesText,
   onJoin,
   onStart,
   onLeave,
   onDisband,
+  onAddGuest,
+  onRemoveGuest,
 }: {
   state: RoomState;
   isHost: boolean;
   isMember: boolean;
   canJoin: boolean;
-  membersBySeat: RoomState["members"][string][];
+  membersBySeat: Member[];
+  profiles: Record<string, UserProfile>;
   busy: boolean;
   rulesText: string | null;
   onJoin: () => void;
   onStart: () => void;
   onLeave: () => void;
   onDisband: () => void;
+  onAddGuest: (name: string) => Promise<boolean>;
+  onRemoveGuest: (guestId: string) => void;
 }) {
   const [confirmDisband, setConfirmDisband] = useState(false);
   return (
@@ -173,13 +229,31 @@ function Lobby({
             <div
               key={m.player_id}
               data-testid="lobby-member"
-              className="rounded-xl border border-border bg-surface px-4 py-3 text-sm font-medium"
+              data-player={m.display_name}
+              className="flex min-h-14 items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2 text-sm font-medium"
             >
-              {m.display_name}
-              {m.player_id === state.host_id && <span className="ml-2 text-xs font-semibold text-gold-text">HOST</span>}
+              <PlayerLabel playerId={m.player_id} name={m.display_name} profile={profiles[m.player_id]} link />
+              {m.player_id === state.host_id && <span className="text-xs font-semibold text-gold-text">HOST</span>}
+              {m.is_guest && <GuestTag />}
+              {m.is_guest && isHost && (
+                <button
+                  type="button"
+                  onClick={() => onRemoveGuest(m.player_id)}
+                  disabled={busy}
+                  data-testid="remove-guest-btn"
+                  className="ml-auto shrink-0 text-xs font-semibold text-muted disabled:opacity-50"
+                >
+                  Remove
+                </button>
+              )}
             </div>
           ))}
         </div>
+        {isHost && isMember && (
+          <div className="mt-3">
+            <AddGuestForm busy={busy} onAdd={onAddGuest} />
+          </div>
+        )}
       </div>
 
       {!isMember ? (
@@ -190,7 +264,7 @@ function Lobby({
             onClick={onJoin}
             disabled={busy}
             data-testid="lobby-join-btn"
-            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             Join Room
           </button>
@@ -201,7 +275,7 @@ function Lobby({
             onClick={onStart}
             disabled={busy || membersBySeat.length < 2}
             data-testid="start-game-btn"
-            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             {membersBySeat.length < 2 ? "Waiting for more players…" : "Start Game"}
           </button>
@@ -211,7 +285,7 @@ function Lobby({
                 onClick={onDisband}
                 disabled={busy}
                 data-testid="confirm-disband-btn"
-                className="flex-1 rounded-xl bg-danger py-2.5 text-xs font-semibold text-white disabled:opacity-50"
+                className="flex-1 rounded-xl bg-danger-fill py-2.5 text-xs font-semibold text-on-primary disabled:opacity-50"
               >
                 Close for everyone
               </button>
@@ -327,11 +401,16 @@ function TableView({
   currentRound,
   standings,
   nameOf,
+  profiles,
   busy,
   cardsInput,
   setCardsInput,
+  guests,
+  actor,
+  onPickActor,
   onClaimWin,
   onSubmitCards,
+  onSubmitGuestCards,
   onSpecialHand,
   onVoidRound,
   onVoidSpecial,
@@ -345,11 +424,18 @@ function TableView({
   currentRound: NonNullable<RoomState["rounds"][number]>;
   standings: [string, number][];
   nameOf: (id: string) => string;
+  profiles: Record<string, UserProfile>;
   busy: boolean;
   cardsInput: string;
   setCardsInput: (v: string) => void;
+  /** Guests at the table — only ever non-empty for the host. */
+  guests: Member[];
+  /** Who Win / Special / Undo special / Leave act for (see ActingAs). */
+  actor: string;
+  onPickActor: (playerId: string) => void;
   onClaimWin: () => void;
   onSubmitCards: (cards: number) => void;
+  onSubmitGuestCards: (guestId: string, cards: number) => Promise<boolean>;
   onSpecialHand: () => void;
   onVoidRound: () => void;
   onVoidSpecial: () => void;
@@ -361,7 +447,9 @@ function TableView({
   const [confirmVoid, setConfirmVoid] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
-  const mySpecials = currentRound.special_counts[me] ?? 0;
+  const forGuest = actor !== me;
+  const actorName = nameOf(actor);
+  const actorSpecials = currentRound.special_counts[actor] ?? 0;
   const isPlaying = currentRound.phase === "playing";
   const isCollecting = currentRound.phase === "collecting";
   const iAmWinner = currentRound.winner === me;
@@ -373,6 +461,9 @@ function TableView({
   // accepts up to 52, so the form mirrors the engine rather than the deal.
   const cardsValue = /^\d+$/.test(cardsInput.trim()) ? Number(cardsInput.trim()) : null;
   const cardsValid = cardsValue !== null && cardsValue >= 1 && cardsValue <= 52;
+  const guestsOwing = isCollecting
+    ? guests.filter((g) => g.player_id !== currentRound.winner && !(g.player_id in currentRound.cards_submitted))
+    : [];
 
   return (
     <div className="space-y-6">
@@ -386,12 +477,12 @@ function TableView({
               key={playerId}
               data-testid="standing-row"
               data-player={nameOf(playerId)}
-              className={`flex items-center justify-between rounded-xl border px-4 py-3 text-sm ${
-                idx === 0 ? "border-gold bg-[#FFF8E1]" : "border-border bg-surface"
+              className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-sm ${
+                idx === 0 ? "border-gold bg-highlight" : "border-border bg-surface"
               }`}
             >
-              <span className="font-medium">{nameOf(playerId)}</span>
-              <span data-testid="standing-amount" className={`font-bold ${cents < 0 ? "text-danger" : "text-brand-strong"}`}>
+              <PlayerLabel playerId={playerId} name={nameOf(playerId)} profile={profiles[playerId]} />
+              <span data-testid="standing-amount" className={`shrink-0 font-bold tabular ${cents < 0 ? "text-danger" : "text-brand-strong"}`}>
                 {money(cents)}
               </span>
             </div>
@@ -403,23 +494,29 @@ function TableView({
 
       {/* Someone watching without a seat (they stepped out) sees the table
           but gets nothing to press. */}
+      {isMember && guests.length > 0 && (
+        <ActingAs me={me} guests={guests} actor={actor} onPick={onPickActor} />
+      )}
+
       {isMember && isPlaying && (
         <div className="space-y-3">
           <button
             onClick={onClaimWin}
             disabled={busy}
             data-testid="win-btn"
-            className="w-full rounded-xl bg-brand py-4 text-base font-bold text-white disabled:opacity-50"
+            className="w-full truncate rounded-xl bg-primary px-4 py-4 text-base font-bold text-on-primary disabled:opacity-50"
           >
-            Win
+            {forGuest ? `Win · ${actorName}` : "Win"}
           </button>
           {state.rules?.special_hands_enabled &&
             (confirmSpecial ? (
               // A special settles instantly and charges everyone else, so a
               // stray tap costs real money — make it deliberate.
-              <div className="space-y-2 rounded-xl border border-brand-strong bg-[#FFF8E1] px-3 py-2.5">
+              <div className="space-y-2 rounded-xl border border-brand-strong bg-highlight px-3 py-2.5">
                 <p className="text-center text-xs text-brand">
-                  Charge everyone else for a special hand?
+                  {forGuest
+                    ? `Charge everyone else for ${actorName}'s special hand?`
+                    : "Charge everyone else for a special hand?"}
                 </p>
                 <div className="flex gap-2">
                   <button
@@ -429,7 +526,7 @@ function TableView({
                     }}
                     disabled={busy}
                     data-testid="confirm-special-btn"
-                    className="flex-1 rounded-xl bg-brand py-2.5 text-xs font-semibold text-white disabled:opacity-50"
+                    className="flex-1 rounded-xl bg-primary py-2.5 text-xs font-semibold text-on-primary disabled:opacity-50"
                   >
                     Claim it
                   </button>
@@ -447,9 +544,9 @@ function TableView({
                 onClick={() => setConfirmSpecial(true)}
                 disabled={busy}
                 data-testid="special-hand-btn"
-                className="w-full rounded-xl border border-border py-3 text-sm font-semibold text-brand disabled:opacity-50"
+                className="w-full truncate rounded-xl border border-border px-4 py-3 text-sm font-semibold text-brand disabled:opacity-50"
               >
-                Special Hand
+                {forGuest ? `Special Hand · ${actorName}` : "Special Hand"}
               </button>
             ))}
 
@@ -491,7 +588,7 @@ function TableView({
             type="submit"
             disabled={busy || !cardsValid}
             data-testid="submit-cards-btn"
-            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             Submit
           </button>
@@ -504,25 +601,35 @@ function TableView({
         </p>
       )}
 
+      {isMember && guestsOwing.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs uppercase tracking-widest text-muted">Guest card counts</p>
+          {guestsOwing.map((g) => (
+            <GuestCardsRow key={g.player_id} guest={g} busy={busy} onSubmit={onSubmitGuestCards} />
+          ))}
+        </div>
+      )}
+
       <RoundLog rounds={state.rounds} me={me} nameOf={nameOf} />
 
       {/* Everything below here either reverses something or ends the
           night. Grouped, small and confirm-gated, kept well away from Win
           and Special — the buttons people reach for mid-hand. */}
-      {isMember && (mySpecials > 0 || (isCollecting && (isHost || iAmWinner))) && (
+      {isMember && (actorSpecials > 0 || (isCollecting && (isHost || iAmWinner))) && (
         <div className="space-y-2 rounded-xl border border-border bg-surface px-3 py-2.5">
           <p className="text-[10px] uppercase tracking-wider text-muted">Fix a mistake</p>
 
         {/* Voiding a round deliberately leaves specials alone, so this is
             the only way back from a mistaken claim. */}
-        {mySpecials > 0 && (
+        {actorSpecials > 0 && (
           <button
             onClick={onVoidSpecial}
             disabled={busy}
             data-testid="undo-special-btn"
-            className="w-full rounded-lg border border-border py-2 text-xs font-semibold text-muted disabled:opacity-50"
+            className="w-full truncate rounded-lg border border-border px-3 py-2 text-xs font-semibold text-muted disabled:opacity-50"
           >
-            Undo my special hand{mySpecials > 1 ? ` (${mySpecials})` : ""}
+            {forGuest ? `Undo ${actorName}'s special hand` : "Undo my special hand"}
+            {actorSpecials > 1 ? ` (${actorSpecials})` : ""}
           </button>
         )}
 
@@ -544,7 +651,7 @@ function TableView({
                   }}
                   disabled={busy}
                   data-testid="confirm-void-btn"
-                  className="flex-1 rounded-lg bg-danger py-2 text-xs font-semibold text-white disabled:opacity-50"
+                  className="flex-1 rounded-lg bg-danger-fill py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
                 >
                   Restart round
                 </button>
@@ -589,7 +696,7 @@ function TableView({
                     }}
                     disabled={busy}
                     data-testid="confirm-end-btn"
-                    className="flex-1 rounded-lg bg-danger py-2 text-xs font-semibold text-white disabled:opacity-50"
+                    className="flex-1 rounded-lg bg-danger-fill py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
                   >
                     End &amp; settle
                   </button>
@@ -624,8 +731,9 @@ function TableView({
           {confirmLeave ? (
             <div className="mt-2 space-y-2">
               <p className="text-center text-xs text-muted">
-                Leave for good? You keep what you&apos;re up or down and settle with everyone,
-                but you can&apos;t rejoin this game.
+                {forGuest
+                  ? `Take ${actorName} out for good? They keep what they're up or down and settle with everyone.`
+                  : "Leave for good? You keep what you're up or down and settle with everyone, but you can't rejoin this game."}
               </p>
               <div className="flex gap-2">
                 <button
@@ -635,9 +743,9 @@ function TableView({
                   }}
                   disabled={busy}
                   data-testid="confirm-leave-btn"
-                  className="flex-1 rounded-lg bg-danger py-2 text-xs font-semibold text-white disabled:opacity-50"
+                  className="flex-1 rounded-lg bg-danger-fill py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
                 >
-                  Leave game
+                  {forGuest ? "Take out" : "Leave game"}
                 </button>
                 <button
                   onClick={() => setConfirmLeave(false)}
@@ -653,9 +761,9 @@ function TableView({
               onClick={() => setConfirmLeave(true)}
               disabled={busy}
               data-testid="leave-game-btn"
-              className="mt-2 w-full rounded-lg border border-border py-2 text-xs font-semibold text-muted disabled:opacity-50"
+              className="mt-2 w-full truncate rounded-lg border border-border px-3 py-2 text-xs font-semibold text-muted disabled:opacity-50"
             >
-              Leave game
+              {forGuest ? `Take ${actorName} out` : "Leave game"}
             </button>
           )}
         </div>
@@ -664,14 +772,64 @@ function TableView({
   );
 }
 
+/** One guest's card count, entered by the host. */
+function GuestCardsRow({
+  guest,
+  busy,
+  onSubmit,
+}: {
+  guest: Member;
+  busy: boolean;
+  onSubmit: (guestId: string, cards: number) => Promise<boolean>;
+}) {
+  const [value, setValue] = useState("");
+  const n = /^\d+$/.test(value.trim()) ? Number(value.trim()) : null;
+  const valid = n !== null && n >= 1 && n <= 52;
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (valid && n !== null && (await onSubmit(guest.player_id, n))) setValue("");
+      }}
+      data-testid="guest-cards-row"
+      data-player={guest.display_name}
+      className="flex items-center gap-2 rounded-xl border border-border bg-surface py-2 pl-4 pr-2"
+    >
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">{guest.display_name}</span>
+      <input
+        type="number"
+        inputMode="numeric"
+        min={1}
+        max={52}
+        step={1}
+        aria-label={`${guest.display_name}'s cards`}
+        data-testid="guest-cards-input"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="w-16 shrink-0 rounded-lg border border-border bg-background px-2 py-2 text-center outline-none focus:border-brand-strong"
+      />
+      <button
+        type="submit"
+        disabled={busy || !valid}
+        data-testid="guest-cards-submit"
+        className="shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
+      >
+        Submit
+      </button>
+    </form>
+  );
+}
+
 function EndedView({
   standings,
   nameOf,
+  profiles,
   roundsPlayed,
   onHome,
 }: {
   standings: [string, number][];
   nameOf: (id: string) => string;
+  profiles: Record<string, UserProfile>;
   roundsPlayed: number;
   onHome: () => void;
 }) {
@@ -701,14 +859,14 @@ function EndedView({
             key={playerId}
             data-testid="standing-row"
             data-player={nameOf(playerId)}
-            className={`flex items-center justify-between rounded-xl border px-4 py-3 text-sm ${
-              idx === 0 ? "border-gold bg-[#FFF8E1]" : "border-border bg-surface"
+            className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-sm ${
+              idx === 0 ? "border-gold bg-highlight" : "border-border bg-surface"
             }`}
           >
-            <span className="font-medium">{nameOf(playerId)}</span>
+            <PlayerLabel playerId={playerId} name={nameOf(playerId)} profile={profiles[playerId]} link />
             <span
               data-testid="standing-amount"
-              className={`font-bold ${cents < 0 ? "text-danger" : "text-brand-strong"}`}
+              className={`shrink-0 font-bold tabular ${cents < 0 ? "text-danger" : "text-brand-strong"}`}
             >
               {money(cents)}
             </span>
@@ -718,7 +876,7 @@ function EndedView({
       <button
         onClick={onHome}
         data-testid="back-to-home-btn"
-        className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white"
+        className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary"
       >
         Back to Home
       </button>

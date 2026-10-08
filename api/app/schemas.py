@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from mahjong_core.models import MahjongRules
 from pydantic import BaseModel, Field
 from taidi_core.models import MAX_CARDS, GameRules
 
@@ -28,6 +27,8 @@ class CreateRoomRequest(BaseModel):
     # Validated against the game's rules model in the create endpoint (the
     # shape depends on game_type), then kept as the room's draft rules.
     rules: dict[str, Any] | None = None
+    # Play this game in one of your groups (feeds its leaderboard).
+    group_id: UUID | None = None
 
 
 class StartGameRequest(BaseModel):
@@ -40,11 +41,26 @@ class SeqOnlyRequest(BaseModel):
     expected_seq: int
 
 
+# The guest a host is acting for (dispatch.acting_as). Omitted: yourself.
+ActAs = Annotated[UUID | None, Field(default=None)]
+
+
 class RoundCommandRequest(BaseModel):
     """A Taidi command about the current round (win, special, undo)."""
 
     expected_seq: int
     round_no: Pin = None
+    as_player: ActAs = None
+
+
+class StepOutRequest(BaseModel):
+    expected_seq: int
+    as_player: ActAs = None
+
+
+class AddGuestRequest(BaseModel):
+    expected_seq: int
+    display_name: str = Field(max_length=100)
 
 
 class HandCommandRequest(BaseModel):
@@ -52,12 +68,14 @@ class HandCommandRequest(BaseModel):
 
     expected_seq: int
     hand_no: Pin = None
+    as_player: ActAs = None
 
 
 class SubmitCardsRequest(BaseModel):
     expected_seq: int
     cards: CardCount
     round_no: Pin = None
+    as_player: ActAs = None
 
 
 class SubmitForRequest(BaseModel):
@@ -76,7 +94,9 @@ class AssignSeatsRequest(BaseModel):
 
 class StartMahjongRequest(BaseModel):
     expected_seq: int
-    rules: MahjongRules | None = None
+    # Validated in the router via MahjongRules.from_stored, so a client from
+    # before dollars (no cents_per_unit) is read as sending chips.
+    rules: dict[str, Any] | None = None
 
 
 class DeclareYaoRequest(BaseModel):
@@ -84,12 +104,14 @@ class DeclareYaoRequest(BaseModel):
     target_seat: Seat
     an: bool = False
     hand_no: Pin = None
+    as_player: ActAs = None
 
 
 class DeclareGangRequest(BaseModel):
     expected_seq: int
     target: Seat | Literal["angang"]
     hand_no: Pin = None
+    as_player: ActAs = None
 
 
 class DeclareHuRequest(BaseModel):
@@ -100,6 +122,7 @@ class DeclareHuRequest(BaseModel):
     zimo_bonus: bool = False
     klppdd: bool = False
     hand_no: Pin = None
+    as_player: ActAs = None
 
 
 class SetUsernameRequest(BaseModel):

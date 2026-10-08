@@ -187,7 +187,7 @@ export default function SupabaseAuthForm({
             type="submit"
             disabled={busy || !email.trim() || !password}
             data-testid="continue-btn"
-            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             Log In
           </button>
@@ -276,7 +276,7 @@ export default function SupabaseAuthForm({
               !handleResult?.available
             }
             data-testid="signup-btn"
-            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             Create Account
           </button>
@@ -309,7 +309,7 @@ export default function SupabaseAuthForm({
             type="submit"
             disabled={busy || !email.trim()}
             data-testid="send-reset-btn"
-            className="w-full rounded-xl bg-brand py-3 text-sm font-semibold text-white disabled:opacity-50"
+            className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-on-primary disabled:opacity-50"
           >
             Send Reset Link
           </button>

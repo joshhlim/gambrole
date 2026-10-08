@@ -1,6 +1,14 @@
 @import "tailwindcss";
 
+/* `dark:` follows the app's own theme, not just the OS setting. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Two palettes over one set of names: every colour in the app is one of
+   these tokens, so a component never has to know which theme it's in. The
+   dark set is applied by data-theme="dark" on <html> — set before first
+   paint by the inline script in layout.tsx (see lib/preferences.ts). */
 :root {
+  color-scheme: light;
   --background: #f7f5f0;
   --surface: #ffffff;
   --border: #e3dfd4;
@@ -18,6 +26,66 @@
   /* Gold for small text on light ground (the HOST tag): the base gold
      manages ~2:1 there; this keeps the hue at ≥4.5:1. */
   --gold-text: #86691a;
+  /* The pale-gold ground behind whatever's selected or leading. */
+  --highlight: #fff8e1;
+  /* Filled buttons. In light they're the brand colours; in dark the text
+     tokens lighten for legibility while fills stay deep enough for white
+     text, so the two had to separate. */
+  --primary: #1e3a2f;
+  --primary-strong: #1e6b4f;
+  --danger-fill: #c0392b;
+  --on-primary: #ffffff;
+  /* The logo tile. */
+  --tile: #1e3a2f;
+  --blob-a: rgba(30, 107, 79, 0.3);
+  --blob-b: rgba(217, 180, 74, 0.32);
+  --blob-c: rgba(30, 58, 47, 0.22);
+
+  /* Player accents: initials sit on these in white (all ≥4.5:1), and a
+     photo gets a ring of the same colour. */
+  --accent-jade: #1f7a55;
+  --accent-gold: #8a6a12;
+  --accent-ruby: #b3263e;
+  --accent-sapphire: #2557a8;
+  --accent-amethyst: #7442a8;
+  --accent-slate: #4f5d6b;
+  --accent-coral: #b9432c;
+  --accent-teal: #127a80;
+}
+
+/* Text tokens lift well clear of the dark ground (all ≥6:1 on surface,
+   muted included); fills stay dark enough to keep white text ≥4.5:1. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #0e1512;
+  --surface: #17201b;
+  --border: #2a3730;
+  --foreground: #e6ece8;
+  --muted: #9aa69f;
+  --brand: #9fd6ba;
+  --brand-strong: #5cc895;
+  --gold: #c9a646;
+  --danger: #ff8a7d;
+  --gold-bright: #ecc96a;
+  --gold-text: #e0c26b;
+  --highlight: #2a2616;
+  --primary: #2c7356;
+  --primary-strong: #23704f;
+  --danger-fill: #b3372b;
+  --on-primary: #ffffff;
+  --tile: #1f4536;
+  --blob-a: rgba(60, 160, 115, 0.16);
+  --blob-b: rgba(217, 180, 74, 0.1);
+  --blob-c: rgba(40, 110, 80, 0.2);
+
+  --accent-jade: #23805b;
+  --accent-gold: #8f6f16;
+  --accent-ruby: #c03a4f;
+  --accent-sapphire: #3a68b8;
+  --accent-amethyst: #8253b5;
+  --accent-slate: #5d6b79;
+  --accent-coral: #bf4a33;
+  --accent-teal: #167f86;
 }
 
 @theme inline {
@@ -32,6 +100,12 @@
   --color-gold-bright: var(--gold-bright);
   --color-gold-text: var(--gold-text);
   --color-danger: var(--danger);
+  --color-highlight: var(--highlight);
+  --color-primary: var(--primary);
+  --color-primary-strong: var(--primary-strong);
+  --color-danger-fill: var(--danger-fill);
+  --color-on-primary: var(--on-primary);
+  --color-tile: var(--tile);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-display: var(--font-outfit);
@@ -181,4 +255,17 @@ h2,
   .blob-c {
     animation: none;
   }
+}
+
+/* One visible focus ring for every control reached by keyboard, in a
+   colour that reads on both grounds. Pointer taps don't trigger it. */
+:focus-visible {
+  outline: 2px solid var(--brand-strong);
+  outline-offset: 2px;
+}
+
+/* Theme switches shouldn't animate every coloured surface at once. */
+.theme-switching,
+.theme-switching * {
+  transition: none !important;
 }

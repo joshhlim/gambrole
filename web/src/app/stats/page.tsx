@@ -4,6 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ApiError, request } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
+import { useCurrencySymbol } from "@/lib/preferences";
 import type { SessionFact, StatsFactsResponse } from "@/lib/statsFactsTypes";
 import {
   applyFilters,
@@ -96,7 +97,7 @@ function FilterBar({
   const chip = (on: boolean) =>
     `rounded-lg border px-2 py-1 text-[11px] font-semibold ${
       on
-        ? "border-brand-strong bg-[#FFF8E1] text-brand"
+        ? "border-brand-strong bg-highlight text-brand"
         : "border-border bg-surface text-muted"
     }`;
   return (
@@ -434,6 +435,21 @@ function MahjongTab({ sessions, t }: { sessions: SessionFact[]; t: Totals }) {
   );
 }
 
+function StatsSkeleton() {
+  return (
+    <div className="space-y-4" aria-busy="true" aria-label="Loading stats">
+      <div className="h-9 animate-pulse rounded-lg bg-border/60" />
+      <div className="mx-auto h-12 w-40 animate-pulse rounded-lg bg-border/60" />
+      <div className="grid grid-cols-2 gap-2">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="h-16 animate-pulse rounded-xl border border-border bg-surface" />
+        ))}
+      </div>
+      <div className="h-40 animate-pulse rounded-xl border border-border bg-surface" />
+    </div>
+  );
+}
+
 /** useSearchParams() can't run during prerender, so the part that reads the
  * ?player= target lives under a Suspense boundary and the route stays
  * static. */
@@ -442,7 +458,7 @@ export default function StatsPage() {
     <Suspense
       fallback={
         <main className="mx-auto w-full max-w-md flex-1 px-5 py-8">
-          <p className="text-center text-sm text-muted">Loading…</p>
+          <StatsSkeleton />
         </main>
       }
     >
@@ -464,11 +480,13 @@ function KeyedStatsView() {
 function StatsView({ viewing }: { viewing: string | null }) {
   const router = useRouter();
   const { user, checked } = useStoredUser();
+  // Every amount here, charts included, re-renders with the symbol.
+  useCurrencySymbol();
   const [tab, setTab] = useState<Tab>("overview");
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [all, setAll] = useState<SessionFact[] | null>(null);
   const [whose, setWhose] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ text: string; hidden: boolean } | null>(null);
 
   useEffect(() => {
     if (checked && !user) router.replace("/");
@@ -486,8 +504,14 @@ function StatsView({ viewing }: { viewing: string | null }) {
         setWhose(viewing ? (r.player?.display_name ?? "Your friend") : null);
       })
       .catch((e) => {
-        if (!cancelled)
-          setError(e instanceof ApiError ? e.message : "Couldn't load stats.");
+        if (cancelled) return;
+        // A 403 is a privacy answer (not friends, or they keep their stats
+        // to themselves), not a failure — said plainly, not in red.
+        setError(
+          e instanceof ApiError
+            ? { text: e.message, hidden: e.status === 403 }
+            : { text: "Couldn't load stats.", hidden: false },
+        );
       });
     return () => {
       cancelled = true;
@@ -521,17 +545,22 @@ function StatsView({ viewing }: { viewing: string | null }) {
         </h1>
       </div>
 
-      {error && (
-        <p
-          data-testid="stats-error"
-          className="mb-4 text-center text-sm text-danger"
-        >
-          {error}
-        </p>
-      )}
-
-      {!all ? (
-        <p className="text-center text-sm text-muted">Loading…</p>
+      {error ? (
+        error.hidden ? (
+          <div data-testid="stats-private" className="py-12 text-center">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden className="mx-auto mb-3 text-muted">
+              <rect x="5" y="10.5" width="14" height="10" rx="2.2" stroke="currentColor" strokeWidth="1.7" />
+              <path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" stroke="currentColor" strokeWidth="1.7" />
+            </svg>
+            <p className="text-sm text-muted">{error.text}</p>
+          </div>
+        ) : (
+          <p data-testid="stats-error" className="py-8 text-center text-sm text-danger">
+            {error.text}
+          </p>
+        )
+      ) : !all ? (
+        <StatsSkeleton />
       ) : all.length === 0 ? (
         <p
           data-testid="stats-empty"

@@ -47,7 +47,8 @@ async function send(path: string, options: RequestInit, token: string | null): P
       ...options,
       signal: options.signal ?? AbortSignal.timeout(TIMEOUT_MS),
       headers: {
-        "Content-Type": "application/json",
+        // A Blob body (a photo) carries its own type; everything else is JSON.
+        "Content-Type": options.body instanceof Blob ? options.body.type : "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...options.headers,
       },
@@ -86,13 +87,28 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
 export const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: "POST", body: JSON.stringify(body ?? {}) });
 
+export const put = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: "PUT", body: JSON.stringify(body) });
+
+/** Raw bytes as the body — same auth, timeout and 401 retry as request(). */
+export const upload = <T>(path: string, data: Blob, method: "PUT" | "POST" = "PUT") =>
+  request<T>(path, { method, body: data });
+
 type Room = TaidiRoomState;
+
+/** The host entering a guest's turn sends as_player; omitted, a command is
+ * the caller's own. */
+export const actingAs = (asPlayer?: string) => (asPlayer ? { as_player: asPlayer } : {});
 
 export const api = {
   /** Rules ride along from /new and are held as the room's draft_rules
    * until the host starts it. */
-  createRoom: (gameType: GameType, rules?: GameRules | MahjongRules) =>
-    post<AnyRoomState>("/rooms", { game_type: gameType, ...(rules ? { rules } : {}) }),
+  createRoom: (gameType: GameType, rules?: GameRules | MahjongRules, groupId?: string | null) =>
+    post<AnyRoomState>("/rooms", {
+      game_type: gameType,
+      ...(rules ? { rules } : {}),
+      ...(groupId ? { group_id: groupId } : {}),
+    }),
   byCode: (code: string) =>
     request<{ room_id: string; game_type: GameType }>(`/rooms/by-code/${code}`),
   activeRoom: () => request<ActiveRoom>("/rooms/active"),
@@ -109,13 +125,24 @@ export const api = {
   // Everything that acts on a round names it (round_no = the last round as
   // this device saw it). The server then refuses it if that round has
   // since closed, instead of applying a tap meant for round N to round N+1.
-  claimWin: (roomId: string, expectedSeq: number, roundNo: number) =>
-    post<Room>(`/rooms/${roomId}/win`, { expected_seq: expectedSeq, round_no: roundNo }),
-  submitCards: (roomId: string, expectedSeq: number, roundNo: number, cards: number) =>
+  claimWin: (roomId: string, expectedSeq: number, roundNo: number, asPlayer?: string) =>
+    post<Room>(`/rooms/${roomId}/win`, {
+      expected_seq: expectedSeq,
+      round_no: roundNo,
+      ...actingAs(asPlayer),
+    }),
+  submitCards: (
+    roomId: string,
+    expectedSeq: number,
+    roundNo: number,
+    cards: number,
+    asPlayer?: string,
+  ) =>
     post<Room>(`/rooms/${roomId}/cards`, {
       expected_seq: expectedSeq,
       round_no: roundNo,
       cards,
+      ...actingAs(asPlayer),
     }),
   submitFor: (
     roomId: string,
@@ -130,12 +157,20 @@ export const api = {
       target_player: targetPlayer,
       cards,
     }),
-  specialHand: (roomId: string, expectedSeq: number, roundNo: number) =>
-    post<Room>(`/rooms/${roomId}/special`, { expected_seq: expectedSeq, round_no: roundNo }),
-  stepOut: (roomId: string, expectedSeq: number) =>
-    post<Room>(`/rooms/${roomId}/step-out`, { expected_seq: expectedSeq }),
-  voidSpecialHand: (roomId: string, expectedSeq: number, roundNo: number) =>
-    post<Room>(`/rooms/${roomId}/void-special`, { expected_seq: expectedSeq, round_no: roundNo }),
+  specialHand: (roomId: string, expectedSeq: number, roundNo: number, asPlayer?: string) =>
+    post<Room>(`/rooms/${roomId}/special`, {
+      expected_seq: expectedSeq,
+      round_no: roundNo,
+      ...actingAs(asPlayer),
+    }),
+  stepOut: (roomId: string, expectedSeq: number, asPlayer?: string) =>
+    post<Room>(`/rooms/${roomId}/step-out`, { expected_seq: expectedSeq, ...actingAs(asPlayer) }),
+  voidSpecialHand: (roomId: string, expectedSeq: number, roundNo: number, asPlayer?: string) =>
+    post<Room>(`/rooms/${roomId}/void-special`, {
+      expected_seq: expectedSeq,
+      round_no: roundNo,
+      ...actingAs(asPlayer),
+    }),
   voidLastRound: (roomId: string, expectedSeq: number, roundNo: number) =>
     post<Room>(`/rooms/${roomId}/void`, { expected_seq: expectedSeq, round_no: roundNo }),
   endGame: (roomId: string, expectedSeq: number) =>

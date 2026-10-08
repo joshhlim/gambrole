@@ -63,7 +63,7 @@ async def test_stats_combine_taidi_and_mahjong_with_exact_numbers(make_device):
     assert r.status_code == 200, r.text
 
     # --- Mahjong: 4 players, Alice HUs directly off Bob (seat 1) at 1 tai
-    # against the default "3/6 半" table (hu(1)=4) -> Bob pays Alice 4 chips.
+    # against the default "3/6 半" table (hu(1)=$2) -> Bob pays Alice 200 cents.
     cara = await make_device("Cara")
     dan = await make_device("Dan")
     r = await alice.post("/rooms", json={"game_type": "mahjong"})
@@ -87,13 +87,12 @@ async def test_stats_combine_taidi_and_mahjong_with_exact_numbers(make_device):
     r = await alice.post(f"/rooms/{mj_room_id}/mahjong/end", json={"expected_seq": state["seq"]})
     assert r.status_code == 200, r.text
 
-    # --- Alice's stats: +200 cents (taidi) + 4 chips * 50 = 200 cents (mahjong).
+    # --- Alice's stats: +200 cents (taidi) + 200 cents (mahjong).
     r = await alice.get("/stats/me")
     assert r.status_code == 200, r.text
     a = r.json()
     assert a["overview"]["taidi_cents"] == 200
     assert a["overview"]["mahjong_cents"] == 200
-    assert a["overview"]["mahjong_chips"] == 4
     assert a["overview"]["total_cents"] == 400
     assert a["overview"]["taidi_sessions"] == 1
     assert a["overview"]["mahjong_sessions"] == 1
@@ -114,8 +113,8 @@ async def test_stats_combine_taidi_and_mahjong_with_exact_numbers(make_device):
     assert a["mahjong"]["hu_count"] == 1
     assert a["mahjong"]["hu_rate"] == 1.0
     assert a["mahjong"]["win_mode_counts"] == {"direct": 1}
-    assert a["mahjong"]["profit_by_kind"] == {"hu": 4}
-    assert a["mahjong"]["best_hand_chips"] == 4
+    assert a["mahjong"]["profit_by_kind"] == {"hu": 200}
+    assert a["mahjong"]["best_hand_cents"] == 200
 
     # --- Bob's stats: mirror image, both sessions a loss.
     r = await bob.get("/stats/me")
@@ -123,7 +122,6 @@ async def test_stats_combine_taidi_and_mahjong_with_exact_numbers(make_device):
     b = r.json()
     assert b["overview"]["taidi_cents"] == -200
     assert b["overview"]["mahjong_cents"] == -200
-    assert b["overview"]["mahjong_chips"] == -4
     assert b["overview"]["total_cents"] == -400
     assert b["overview"]["current_streak"] == -2
 
@@ -137,7 +135,7 @@ async def test_stats_combine_taidi_and_mahjong_with_exact_numbers(make_device):
     assert b["mahjong"]["hu_count"] == 0
     assert b["mahjong"]["hu_rate"] == 0.0
     assert b["mahjong"]["dealer_hands"] == 0  # Bob is seat 1, dealer was seat 0
-    assert b["mahjong"]["profit_by_kind"] == {"hu": -4}
+    assert b["mahjong"]["profit_by_kind"] == {"hu": -200}
 
     # --- Cara/Dan only played the mahjong room, not the taidi one.
     r = await cara.get("/stats/me")

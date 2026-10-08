@@ -4,9 +4,11 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
+import { useCurrencySymbol } from "@/lib/preferences";
 import { money } from "@/lib/format";
 import { historyApi } from "@/lib/historyApi";
 import type { HistoryEntry, HistoryResponse } from "@/lib/historyTypes";
+import { RowsSkeleton } from "@/components/Skeleton";
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -54,7 +56,7 @@ function GameCard({ game }: { game: HistoryEntry }) {
             </p>
           )}
           {game.settlements_needs_my_approval > 0 && (
-            <span className="rounded-full bg-[#FFF8E1] px-2 py-0.5 text-xs font-semibold text-brand">
+            <span className="rounded-full bg-highlight px-2 py-0.5 text-xs font-semibold text-brand">
               {game.settlements_needs_my_approval} needs your approval
             </span>
           )}
@@ -67,6 +69,7 @@ function GameCard({ game }: { game: HistoryEntry }) {
 export default function HistoryPage() {
   const router = useRouter();
   const { user, checked } = useStoredUser();
+  useCurrencySymbol();
   const [data, setData] = useState<HistoryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -104,7 +107,7 @@ export default function HistoryPage() {
       )}
 
       {!data ? (
-        <p className="text-center text-sm text-muted">Loading…</p>
+        <RowsSkeleton rows={4} />
       ) : data.games.length === 0 ? (
         <p data-testid="history-empty" className="text-center text-sm text-muted py-8">
           No finished games yet — play a room to see your history here.

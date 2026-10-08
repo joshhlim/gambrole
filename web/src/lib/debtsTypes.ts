@@ -20,6 +20,9 @@ export interface DebtView {
    * backstop did it (auto_ended). */
   ended_by: string | null;
   auto_ended: boolean;
+  /** The other side is a guest nobody has claimed: they have no app to
+   * confirm with, so the debt is closed one-sided (debtsApi.settle). */
+  counterparty_is_guest: boolean;
 }
 
 export interface DebtsResponse {
