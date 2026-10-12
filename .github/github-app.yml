@@ -1,0 +1,50 @@
+# GitHub Copilot app project config. Mirrors the dev container's
+# postCreateCommand and run commands (.devcontainer/devcontainer.json).
+# Reference: https://docs.github.com/en/copilot/reference/github-copilot-app-reference/repository-configuration
+scripts:
+  # Runs once when a session is created. Each session is a fresh checkout, so
+  # it has no virtualenv, node_modules, or gitignored env files yet; the env
+  # files are copied from the main checkout when they exist there.
+  - name: Setup
+    triggers:
+      - session.create
+    command: |
+      set -e
+      cd "$COPILOT_WORKSPACE_PATH"
+      for f in api/.env web/.env.local; do
+        if [ -f "$COPILOT_ROOT_PATH/$f" ] && [ ! -e "$f" ]; then
+          cp "$COPILOT_ROOT_PATH/$f" "$f"
+        fi
+      done
+      python3 -m venv .venv
+      .venv/bin/pip install -r requirements-dev.txt
+      (cd web && npm ci)
+
+  - name: Web (Next.js, port 3100)
+    command: |
+      cd "$COPILOT_WORKSPACE_PATH/web"
+      npm run dev -- --port 3100
+
+  - name: API (FastAPI, port 8000)
+    command: |
+      set -e
+      cd "$COPILOT_WORKSPACE_PATH"
+      docker compose up -d --wait postgres
+      cd api
+      ../.venv/bin/python -m alembic upgrade head
+      ../.venv/bin/python -m uvicorn app.main:app --reload
+
+  - name: Legacy Streamlit app
+    command: |
+      cd "$COPILOT_WORKSPACE_PATH"
+      .venv/bin/streamlit run taidi.py
+
+  - name: Tests
+    command: |
+      cd "$COPILOT_WORKSPACE_PATH"
+      .venv/bin/python -m pytest tests core/tests -q
+
+  - name: Lint
+    command: |
+      cd "$COPILOT_WORKSPACE_PATH"
+      .venv/bin/ruff check . && .venv/bin/ruff format --check .
