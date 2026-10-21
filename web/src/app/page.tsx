@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
 import type { ActiveRoom } from "@/lib/types";
 import SignInPanel from "@/components/SignInPanel";
+import { roomHref } from "@/lib/routes";
 
 export default function HomePage() {
   const router = useRouter();
@@ -71,9 +72,7 @@ export default function HomePage() {
               {activeRoom?.room_id && (
                 <button
                   onClick={() =>
-                    router.push(
-                      `/room/${activeRoom.room_id}${activeRoom.game_type ? `?g=${activeRoom.game_type}` : ""}`,
-                    )
+                    activeRoom.room_id && router.push(roomHref(activeRoom.room_id, activeRoom.game_type))
                   }
                   data-testid="rejoin-room-btn"
                   className="w-full rounded-xl bg-primary-strong py-3 text-sm font-semibold text-on-primary"

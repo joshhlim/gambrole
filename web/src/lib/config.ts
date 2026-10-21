@@ -15,3 +15,13 @@ export const API_URL_MISSING = "App misconfigured: NEXT_PUBLIC_API_URL is not se
 if (API_URL === null && typeof window !== "undefined") {
   console.error(API_URL_MISSING);
 }
+
+/**
+ * The public web address, for links that leave the device — share links and
+ * email redirects. Inside the iOS app window.location.origin is
+ * capacitor://localhost, which nobody else can open, so the app build sets
+ * NEXT_PUBLIC_SITE_URL; the website itself can leave it unset.
+ */
+export function siteUrl(): string {
+  return process.env.NEXT_PUBLIC_SITE_URL ?? window.location.origin;
+}

@@ -13,6 +13,7 @@ import { useCurrencySymbol } from "@/lib/preferences";
 import { profileApi } from "@/lib/profileApi";
 import type { AnyRoomState, GameRules, GameType } from "@/lib/types";
 import type { MahjongRules, TaiPayout } from "@/lib/mahjongTypes";
+import { roomHref } from "@/lib/routes";
 
 const DEFAULT_RULES: GameRules = {
   card_value_cents: 20,
@@ -550,7 +551,7 @@ function NewRoomForm() {
     // so it can render without waiting on a fetch that would tell it exactly
     // what we already know.
     stashFreshState(created);
-    router.push(`/room/${created.room_id}?g=${gameType}`);
+    router.push(roomHref(created.room_id, gameType));
   }
 
   if (!user) return null;

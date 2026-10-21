@@ -1,5 +1,8 @@
 import type { MetadataRoute } from "next";
 
+// Built once into a file: the site is a static export (see next.config.ts).
+export const dynamic = "force-static";
+
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "GamBROle",

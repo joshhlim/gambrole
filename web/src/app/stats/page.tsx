@@ -26,6 +26,7 @@ import SplitDonut from "@/components/charts/SplitDonut";
 import ResultScatter from "@/components/charts/ResultScatter";
 import TabTransition from "@/components/TabTransition";
 import TabBar from "@/components/TabBar";
+import { roomHref } from "@/lib/routes";
 
 const TABS = ["overview", "taidi", "mahjong"] as const;
 type Tab = (typeof TABS)[number];
@@ -605,7 +606,7 @@ function StatsView({ viewing }: { viewing: string | null }) {
                 onSelectRoom={
                   viewing
                     ? undefined
-                    : (s) => router.push(`/room/${s.room_id}?g=${s.game_type}`)
+                    : (s) => router.push(roomHref(s.room_id, s.game_type))
                 }
               />
             ) : tab === "taidi" ? (

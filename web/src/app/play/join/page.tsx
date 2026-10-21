@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
+import { roomHref } from "@/lib/routes";
 
 /** The code entry, on its own page so it only appears once you've said you
  * want to join something. */
@@ -27,7 +28,7 @@ export default function JoinRoomPage() {
     try {
       const { room_id, game_type } = await api.byCode(entered);
       // the room page handles joining; ?g= saves it a lookup round trip
-      router.push(`/room/${room_id}?g=${game_type}`);
+      router.push(roomHref(room_id, game_type));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Couldn't find that room.");
       setBusy(false);

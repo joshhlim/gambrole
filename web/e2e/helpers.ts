@@ -32,7 +32,7 @@ export async function openNewRoom(page: Page, game: "taidi" | "mahjong" | "poker
 /** Submits the open rules form and returns the new room's invite code. */
 export async function submitNewRoom(page: Page): Promise<string> {
   await page.getByTestId("create-room-btn").click();
-  await expect(page).toHaveURL(/\/room\//);
+  await expect(page).toHaveURL(/\/room\?id=/);
   const code = (await page.getByTestId("invite-code").textContent())?.trim() ?? "";
   expect(code).toMatch(/^[A-Z0-9]{6}$/);
   return code;
@@ -45,7 +45,7 @@ export async function joinByCode(page: Page, code: string) {
   await page.getByTestId("join-room-option").click();
   await page.getByTestId("room-code-input").fill(code);
   await page.getByTestId("join-room-btn").click();
-  await expect(page).toHaveURL(/\/room\//);
+  await expect(page).toHaveURL(/\/room\?id=/);
 }
 
 export function amountFor(page: Page, namePrefix: string) {

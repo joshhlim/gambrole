@@ -4,7 +4,7 @@ import { createBrowserClient } from "@supabase/ssr";
 import type { Session, User } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
 
-import { API_URL, API_URL_MISSING } from "./config";
+import { API_URL, API_URL_MISSING, siteUrl } from "./config";
 
 const TOKEN_KEY = "taidi_token";
 const USER_KEY = "taidi_user";
@@ -364,7 +364,7 @@ export async function signInWithPassword(
  * the link is clicked — /auth/callback listens for it and prompts for a
  * new password instead of just signing the user in. */
 export async function requestPasswordReset(email: string): Promise<void> {
-  const redirectTo = `${window.location.origin}/auth/callback`;
+  const redirectTo = `${siteUrl()}/auth/callback`;
   if (LOCAL) {
     // No email in local mode: the API logs the link (and leaves its token
     // in test_accounts) instead of sending it.

@@ -300,7 +300,8 @@ See [web/README.md](web/README.md) and ADR-0004.
 | Path | Purpose |
 | --- | --- |
 | `src/app/page.tsx` | Home: sign-in, new room, join by code |
-| `src/app/room/[roomId]/page.tsx` | Lobby, live table, ended-game views |
+| `src/app/room/page.tsx` | Lobby, live table, ended-game views (`/room?id=…`) |
+| `src/lib/routes.ts` | Room/group hrefs — ids go in the query string so the site exports as static files |
 | `src/lib/api.ts` | Typed fetch client; auto-retries a command once on 409 |
 | `src/lib/usePolling.ts` | Stands in for Supabase Realtime for now |
 | `e2e/full-game.spec.ts` | Three-device end-to-end proof |

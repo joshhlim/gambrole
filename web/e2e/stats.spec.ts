@@ -76,7 +76,7 @@ test("stats dashboard reflects a finished Taidi game and a finished Mahjong game
     // A session bar opens that game's room, straight onto the right screen.
     await alice.getByTestId("stats-tab-overview").click();
     await alice.locator('[data-testid="chart-sessions"] svg g rect').first().click();
-    await expect(alice).toHaveURL(/\/room\/[^?]+\?g=(taidi|mahjong)/);
+    await expect(alice).toHaveURL(/\/room\?id=[^&]+&g=(taidi|mahjong)/);
     await expect(alice.getByTestId("game-over")).toBeVisible({ timeout: 10_000 });
 
     // --- Bob's perspective: both games are losses.

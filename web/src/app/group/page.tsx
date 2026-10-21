@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
 import { money } from "@/lib/format";
@@ -17,6 +17,7 @@ import ShareLink from "@/components/ShareLink";
 import TabBar from "@/components/TabBar";
 import TabTransition from "@/components/TabTransition";
 import { RowsSkeleton } from "@/components/Skeleton";
+import { roomHref } from "@/lib/routes";
 
 const TABS = ["leaderboard", "games", "members"] as const;
 type Tab = (typeof TABS)[number];
@@ -33,13 +34,13 @@ function formatDate(iso: string): string {
 
 const signed = (cents: number) => (cents > 0 ? `+${money(cents)}` : money(cents));
 
-export default function GroupPage() {
-  const { groupId } = useParams<{ groupId: string }>();
+function GroupView({ groupId }: { groupId: string }) {
   const router = useRouter();
   const { user, checked } = useStoredUser();
   useCurrencySymbol();
   const [group, setGroup] = useState<GroupDetail | null>(null);
-  const [loadError, setLoadError] = useState<ApiError | null>(null);
+  // No ?id= at all reads as not found, not as a fetch of the bare collection.
+  const [loadError, setLoadError] = useState<ApiError | null>(groupId ? null : new ApiError(404, "Not found."));
   const [tab, setTab] = useState<Tab>("leaderboard");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +50,7 @@ export default function GroupPage() {
   }, [checked, user, router]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !groupId) return;
     let cancelled = false;
     groupsApi
       .get(groupId)
@@ -141,7 +142,7 @@ export default function GroupPage() {
           <TabTransition tabKey={tab} order={TABS}>
             {tab === "leaderboard" && <Leaderboard group={group} />}
             {tab === "games" && (
-              <RecentGames group={group} onOpen={(id, g) => router.push(`/room/${id}?g=${g}`)} />
+              <RecentGames group={group} onOpen={(id, g) => router.push(roomHref(id, g))} />
             )}
             {tab === "members" && (
               <div className="space-y-6">
@@ -472,5 +473,21 @@ function Settings({
         />
       </div>
     </div>
+  );
+}
+
+/** ?id= carries what used to be the path segment (see lib/routes.ts);
+ * keyed on it so a different one starts fresh. useSearchParams() can't run
+ * during prerender, hence the Suspense boundary. */
+function GroupViewFromQuery() {
+  const groupId = useSearchParams().get("id") ?? "";
+  return <GroupView key={groupId} groupId={groupId} />;
+}
+
+export default function GroupPage() {
+  return (
+    <Suspense fallback={null}>
+      <GroupViewFromQuery />
+    </Suspense>
   );
 }

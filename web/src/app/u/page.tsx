@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
 import { money } from "@/lib/format";
@@ -66,13 +66,13 @@ function ProfileSkeleton() {
  * allows it — how they've been doing. Anything their privacy hides arrives
  * as null and is simply left out.
  */
-export default function ProfilePage() {
-  const { handle } = useParams<{ handle: string }>();
+function ProfileView({ handle }: { handle: string }) {
   const router = useRouter();
   const { user, checked } = useStoredUser();
   useCurrencySymbol();
   const [profile, setProfile] = useState<PublicProfile | null>(null);
-  const [loadError, setLoadError] = useState<ApiError | null>(null);
+  // No ?handle= at all reads as not found, not as a fetch of the bare collection.
+  const [loadError, setLoadError] = useState<ApiError | null>(handle ? null : new ApiError(404, "Not found."));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,10 +81,10 @@ export default function ProfilePage() {
   }, [checked, user, router]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !handle) return;
     let cancelled = false;
     profileApi
-      .get(decodeURIComponent(handle))
+      .get(handle)
       .then((p) => !cancelled && setProfile(p))
       .catch((e) => {
         if (!cancelled) setLoadError(e instanceof ApiError ? e : new ApiError(0, "Couldn't load this profile."));
@@ -274,4 +274,20 @@ function FriendAction({
         </button>
       );
   }
+}
+
+/** ?handle= carries what used to be the path segment (see lib/routes.ts);
+ * keyed on it so a different one starts fresh. useSearchParams() can't run
+ * during prerender, hence the Suspense boundary. */
+function ProfileViewFromQuery() {
+  const handle = useSearchParams().get("handle") ?? "";
+  return <ProfileView key={handle} handle={handle} />;
+}
+
+export default function ProfilePage() {
+  return (
+    <Suspense fallback={null}>
+      <ProfileViewFromQuery />
+    </Suspense>
+  );
 }

@@ -119,7 +119,7 @@ again later without touching history.
 - `core/mahjong_core/machine.py` — the state machine, dealer/wind logic
 - `api/app/routers/mahjong.py` + `api/app/schemas.py` — HTTP layer
 - `web/src/lib/mahjongTypes.ts`, `mahjongApi.ts` — frontend types/client
-- `web/src/app/room/[roomId]/MahjongRoom.tsx` — the live table UI
+- `web/src/app/room/MahjongRoom.tsx` — the live table UI
 - `web/src/app/new/page.tsx` — rules form + presets
 - `web/e2e/mahjong-game.spec.ts` — 4-device Playwright coverage
 
@@ -139,7 +139,7 @@ again later without touching history.
   package a room folds through. `routers/rooms.py` (Taidi) and
   `routers/mahjong.py` (Mahjong) are fully separate routers sharing only
   `create`/`by-code`/`get-state`.
-- **Frontend**: `room/[roomId]/page.tsx` does one small untyped fetch to
+- **Frontend**: `room/page.tsx` does one small untyped fetch to
   learn `game_type`, then mounts `TaidiRoom` or `MahjongRoom`.
   `usePolling` (1.5s) stands in for realtime. A `run()` wrapper retries
   once on 409 by resyncing to the server's returned state.

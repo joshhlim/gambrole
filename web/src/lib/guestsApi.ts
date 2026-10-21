@@ -2,6 +2,7 @@
 
 import { post, request } from "./api";
 import type { AnyRoomState, GameType, RoomStatus } from "./types";
+import { siteUrl } from "./config";
 
 // Mirrors api/app/routers/guests.py and the guest endpoints in
 // routers/rooms.py / routers/mahjong.py. Keep in sync by hand.
@@ -46,4 +47,4 @@ export const guestsApi = {
     post<{ room_id: string; game_type: GameType }>(`/guests/claim/${encodeURIComponent(token)}`),
 };
 
-export const claimUrl = (token: string) => `${window.location.origin}/claim/${token}`;
+export const claimUrl = (token: string) => `${siteUrl()}/claim?token=${encodeURIComponent(token)}`;

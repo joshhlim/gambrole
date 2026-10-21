@@ -7,6 +7,7 @@ import { useStoredUser } from "@/lib/auth";
 import { groupsApi } from "@/lib/groupsApi";
 import type { GroupSummary } from "@/lib/groupsTypes";
 import { RowsSkeleton } from "@/components/Skeleton";
+import { groupHref } from "@/lib/routes";
 
 const inputCls =
   "min-w-0 flex-1 rounded-xl border border-border bg-surface px-4 py-2.5 text-sm outline-none focus:border-brand-strong";
@@ -55,7 +56,7 @@ export default function GroupsPage() {
     setError(null);
     try {
       const g = await fn();
-      router.push(`/groups/${g.group_id}`);
+      router.push(groupHref(g.group_id));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "That didn't go through.");
       setBusy(false);
@@ -92,7 +93,7 @@ export default function GroupsPage() {
             {groups.map((g) => (
               <button
                 key={g.group_id}
-                onClick={() => router.push(`/groups/${g.group_id}`)}
+                onClick={() => router.push(groupHref(g.group_id))}
                 data-testid="group-row"
                 data-group={g.name}
                 className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-left"

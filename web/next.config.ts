@@ -8,7 +8,11 @@ if (process.env.VERCEL && !process.env.NEXT_PUBLIC_API_URL) {
 }
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Plain static files (out/), so the iOS app can bundle the site with
+  // Capacitor. That rules out server features: no dynamic [param] routes
+  // (ids go in the query string — lib/routes.ts), no redirects here (old
+  // links are redirected in vercel.json instead), no API routes.
+  output: "export",
 };
 
 export default nextConfig;

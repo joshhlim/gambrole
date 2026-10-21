@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "redirects": [
+    { "source": "/room/:id", "destination": "/room?id=:id", "permanent": true },
+    { "source": "/groups/join/:code", "destination": "/groups/join?code=:code", "permanent": true },
+    { "source": "/groups/:id((?!join$)[^/]+)", "destination": "/group?id=:id", "permanent": true },
+    { "source": "/u/:handle", "destination": "/u?handle=:handle", "permanent": true },
+    { "source": "/claim/:token", "destination": "/claim?token=:token", "permanent": true }
+  ]
+}

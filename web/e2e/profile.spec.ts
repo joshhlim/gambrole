@@ -86,7 +86,7 @@ test("settings: photo, about, accent, theme, currency and privacy", async ({ bro
     await expect(alice.getByTestId("settings-currency-status")).toHaveText("Saved.");
 
     // Bob sees what Alice shares.
-    await bob.goto(`/u/${handle}`);
+    await bob.goto(`/u?handle=${handle}`);
     await expect(bob.getByTestId("profile-bio")).toHaveText("Plays every Friday.", { timeout: 10_000 });
     await expect(bob.getByTestId("profile-city")).toHaveText("Singapore");
     await expect(bob.getByTestId("avatar-photo")).toBeVisible();
@@ -115,7 +115,7 @@ test("settings: photo, about, accent, theme, currency and privacy", async ({ bro
     await alice.goto("/settings");
     await alice.getByTestId("profile-visibility-nobody").click();
     await expect(alice.getByTestId("settings-privacy-status")).toHaveText("Saved.");
-    await bob.goto(`/u/${handle}`);
+    await bob.goto(`/u?handle=${handle}`);
     await expect(bob.getByTestId("profile-name")).toBeVisible({ timeout: 10_000 });
     await expect(bob.getByTestId("profile-bio")).toHaveCount(0);
     await expect(bob.getByTestId("profile-city")).toHaveCount(0);
@@ -175,12 +175,12 @@ test("a friend request from a profile page, accepted from the other's", async ({
     const annHandle = await usernameOf(ann);
     const benHandle = await usernameOf(ben);
 
-    await ann.goto(`/u/${benHandle}`);
+    await ann.goto(`/u?handle=${benHandle}`);
     await expect(ann.getByTestId("profile-username")).toHaveText(`@${benHandle}`, { timeout: 10_000 });
     await ann.getByTestId("profile-add-btn").click();
     await expect(ann.getByTestId("profile-friend-state")).toHaveText("Requested");
 
-    await ben.goto(`/u/${annHandle}`);
+    await ben.goto(`/u?handle=${annHandle}`);
     await ben.getByTestId("profile-accept-btn").click();
     await expect(ben.getByTestId("profile-friend-state")).toHaveText("Friends");
     // Friends see each other's headline stats.

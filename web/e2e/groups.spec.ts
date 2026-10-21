@@ -14,19 +14,19 @@ test("a group: create, join by link, play a game in it, rotate the code", async 
     await owner.getByTestId("group-name-input").fill(groupName);
     await owner.getByTestId("create-group-btn").click();
     await expect(owner.getByTestId("group-title")).toHaveText(groupName, { timeout: 10_000 });
-    const groupId = new URL(owner.url()).pathname.split("/").pop()!;
+    const groupId = new URL(owner.url()).searchParams.get("id")!;
 
     await owner.getByTestId("group-tab-members").click();
     const oldCode = (await owner.getByTestId("group-invite-code").textContent())!.trim();
     const link = new URL((await owner.getByTestId("group-share-btn").getAttribute("data-url"))!);
-    expect(link.pathname).toBe(`/groups/join/${oldCode}`);
+    expect(`${link.pathname}${link.search}`).toBe(`/groups/join?code=${oldCode}`);
 
     // A friend opens the link signed out, signs in, and lands in the group.
     const friend = await friendCtx.newPage();
-    await friend.goto(link.pathname);
+    await friend.goto(`${link.pathname}${link.search}`);
     await friend.getByTestId("display-name-input").fill(`Friend-${uniq}`);
     await friend.getByTestId("continue-btn").click();
-    await expect(friend).toHaveURL(new RegExp(`/groups/${groupId}`), { timeout: 10_000 });
+    await expect(friend).toHaveURL(new RegExp(`/group\\?id=${groupId}`), { timeout: 10_000 });
     await expect(friend.getByTestId("group-title")).toHaveText(groupName);
     await skipOnboarding(friend);
 
@@ -52,7 +52,7 @@ test("a group: create, join by link, play a game in it, rotate the code", async 
 
     // Both on the leaderboard, best first.
     for (const p of [owner, friend]) {
-      await p.goto(`/groups/${groupId}`);
+      await p.goto(`/group?id=${groupId}`);
       const rows = p.getByTestId("leaderboard-row");
       await expect(rows).toHaveCount(2, { timeout: 10_000 });
       await expect(rows.first()).toHaveAttribute("data-player", /^Owner-/);
@@ -67,7 +67,7 @@ test("a group: create, join by link, play a game in it, rotate the code", async 
     await owner.getByTestId("rotate-code-btn").click();
     await owner.getByTestId("confirm-rotate-code-btn").click();
     await expect(owner.getByTestId("group-invite-code")).not.toHaveText(oldCode, { timeout: 10_000 });
-    await friend.goto(link.pathname);
+    await friend.goto(`${link.pathname}${link.search}`);
     await expect(friend.getByTestId("group-join-error")).toBeVisible({ timeout: 10_000 });
   } finally {
     await friendCtx.close();

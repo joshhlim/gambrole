@@ -1,13 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
 import type { AnyRoomState, GameType } from "@/lib/types";
 import TaidiRoom from "./TaidiRoom";
 import MahjongRoom from "./MahjongRoom";
 import { RoomLoading, RoomProblem } from "./RoomShell";
+import { roomHref } from "@/lib/routes";
 
 const asGame = (g: string | null): GameType | null =>
   g === "taidi" || g === "mahjong" ? g : null;
@@ -19,12 +20,9 @@ const asGame = (g: string | null): GameType | null =>
  * component re-checks the real game_type and hands back here if the hint
  * was wrong, rather than reading fields the other game doesn't have.
  */
-export default function RoomPage() {
-  const { roomId } = useParams<{ roomId: string }>();
+function Room({ roomId, hinted }: { roomId: string; hinted: GameType | null }) {
   const router = useRouter();
-  const search = useSearchParams();
   const { user, checked } = useStoredUser();
-  const hinted = asGame(search.get("g"));
   // The room as first fetched here, whether by the lookup or by the game
   // component that turned out to be the wrong one — handed on as the next
   // component's first paint.
@@ -73,7 +71,7 @@ export default function RoomPage() {
   const onWrongGame = useCallback(
     (actual: AnyRoomState) => {
       setLooked(actual);
-      router.replace(`/room/${roomId}?g=${actual.game_type}`);
+      router.replace(roomHref(roomId, actual.game_type));
     },
     [roomId, router],
   );
@@ -90,5 +88,24 @@ export default function RoomPage() {
     <MahjongRoom key="mahjong" roomId={roomId} me={user.user_id} initial={looked} onWrongGame={onWrongGame} />
   ) : (
     <TaidiRoom key="taidi" roomId={roomId} me={user.user_id} initial={looked} onWrongGame={onWrongGame} />
+  );
+}
+
+/** The room is ?id= (see lib/routes.ts). Keyed on it so moving to another
+ * room starts fresh, as a new path segment used to. */
+function RoomFromQuery() {
+  const search = useSearchParams();
+  const roomId = search.get("id");
+  if (!roomId) return <RoomProblem kind="not-found" />;
+  return <Room key={roomId} roomId={roomId} hinted={asGame(search.get("g"))} />;
+}
+
+/** useSearchParams() can't run during prerender, so it sits under a
+ * Suspense boundary and the route stays static. */
+export default function RoomPage() {
+  return (
+    <Suspense fallback={<RoomLoading />}>
+      <RoomFromQuery />
+    </Suspense>
   );
 }
