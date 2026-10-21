@@ -42,12 +42,29 @@ npx playwright test          # drives 3 browser contexts through a full game
 (`:3100`) itself — no servers need to be running beforehand for
 `playwright test` specifically (only for `npm run dev`).
 
+## iOS app
+
+The iOS app is this same site, built as static files (`output: "export"`)
+and bundled into a native shell with [Capacitor](https://capacitorjs.com).
+`ios/` is the Xcode project; the site copy inside it (`ios/App/App/public`)
+is generated and not committed.
+
+```bash
+cp .env.app.example .env.app   # once — production API + Supabase values
+npm run build:app              # next build with .env.app, then copy into ios/
+npm run open:ios               # opens Xcode — pick a Simulator or your iPhone, press Run
+```
+
+Rerun `npm run build:app` after any web change; the app only sees what was
+last copied in. The API must allow the app's origin: `capacitor://localhost`
+in `TAIDI_CORS_ORIGINS`.
+
 ## Structure
 
 | Path | Purpose |
 | --- | --- |
 | `src/app/page.tsx` | Home: dev sign-in, new room, join by code |
-| `src/app/room/[roomId]/page.tsx` | Lobby, live table, and ended-game views |
+| `src/app/room/page.tsx` | Lobby, live table, and ended-game views (`/room?id=…`) |
 | `src/app/manifest.ts` | PWA manifest |
 | `src/lib/auth.ts` | Token storage; dev-mode sign-in |
 | `src/lib/api.ts` | Typed fetch client for every room endpoint |
