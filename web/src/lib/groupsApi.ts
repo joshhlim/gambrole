@@ -2,6 +2,7 @@
 
 import { post, request } from "./api";
 import type { GroupDetail, GroupSummary } from "./groupsTypes";
+import { siteUrl } from "./config";
 
 const del = <T>(path: string) => request<T>(path, { method: "DELETE" });
 
@@ -25,4 +26,4 @@ export const groupsApi = {
   remove: (groupId: string) => del<{ deleted: true }>(`/groups/${groupId}`),
 };
 
-export const groupJoinUrl = (code: string) => `${window.location.origin}/groups/join/${code}`;
+export const groupJoinUrl = (code: string) => `${siteUrl()}/groups/join?code=${encodeURIComponent(code)}`;

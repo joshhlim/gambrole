@@ -1,19 +1,19 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
 import { groupsApi } from "@/lib/groupsApi";
 import SignInPanel from "@/components/SignInPanel";
+import { groupHref } from "@/lib/routes";
 
 /**
  * Where a group's invite link lands. Opening the link is the decision to
  * join, so signed in it joins straight away (joining twice is harmless);
  * signed out it asks for an account first, then does the same.
  */
-export default function JoinGroupPage() {
-  const { code } = useParams<{ code: string }>();
+function JoinGroupView({ code }: { code: string }) {
   const router = useRouter();
   const { user, checked } = useStoredUser();
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +24,7 @@ export default function JoinGroupPage() {
     started.current = user.user_id;
     groupsApi
       .join(code)
-      .then((g) => router.replace(`/groups/${g.group_id}`))
+      .then((g) => router.replace(groupHref(g.group_id)))
       .catch((e) => {
         setError(
           e instanceof ApiError && e.status === 404
@@ -63,5 +63,21 @@ export default function JoinGroupPage() {
         <p className="text-center text-sm text-muted">Joining…</p>
       )}
     </main>
+  );
+}
+
+/** ?code= carries what used to be the path segment (see lib/routes.ts);
+ * keyed on it so a different one starts fresh. useSearchParams() can't run
+ * during prerender, hence the Suspense boundary. */
+function JoinGroupViewFromQuery() {
+  const code = useSearchParams().get("code") ?? "";
+  return <JoinGroupView key={code} code={code} />;
+}
+
+export default function JoinGroupPage() {
+  return (
+    <Suspense fallback={null}>
+      <JoinGroupViewFromQuery />
+    </Suspense>
   );
 }

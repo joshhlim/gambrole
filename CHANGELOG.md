@@ -115,6 +115,14 @@ All notable changes to this project are documented here. The format follows
     equality and cached-transfer recomputation; CI runs `alembic check`.
 
 ### Changed
+- **The web app is a static export** (`output: "export"`), groundwork for
+  wrapping it as an iOS app with Capacitor. Pages that took an id in the
+  path now take it in the query string: `/room?id=…&g=…`, `/group?id=…`
+  (was `/groups/<id>`), `/u?handle=…`, `/groups/join?code=…`,
+  `/claim?token=…`. `web/vercel.json` permanently redirects the old paths,
+  so links already shared keep working. Share links and the password-reset
+  redirect use `NEXT_PUBLIC_SITE_URL` when it's set (the app build needs
+  it: inside the app the origin is `capacitor://localhost`).
 - **Mahjong is in dollars, not chips.** Rules and balances are cents; the
   rule fields are `yao_amount`, `gang_amount`, `zimo_bonus_amount`,
   `klppdd_amount` plus `cents_per_unit` (1 for new games). Games played

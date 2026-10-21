@@ -25,7 +25,7 @@ test("a host plays a Taidi game for a guest, who claims it afterwards", async ({
   try {
     await openNewRoom(host, "taidi");
     await submitNewRoom(host);
-    const roomId = new URL(host.url()).pathname.split("/").pop()!;
+    const roomId = new URL(host.url()).searchParams.get("id")!;
 
     // Names are unique at the table, case-insensitively.
     await addGuest(host, gus, 2);
@@ -63,24 +63,25 @@ test("a host plays a Taidi game for a guest, who claims it afterwards", async ({
 
     const share = host.locator(`[data-testid="guest-link-row"][data-player="${gus}"]`).getByTestId("guest-share-btn");
     const claimLink = new URL((await share.getAttribute("data-url"))!);
-    expect(claimLink.pathname).toMatch(/^\/claim\/.+/);
+    expect(claimLink.pathname).toBe("/claim");
+    expect(claimLink.searchParams.get("token")).toBeTruthy();
 
     // The guest, on their own phone with no account yet.
     const claimer = await claimerCtx.newPage();
-    await claimer.goto(claimLink.pathname);
+    await claimer.goto(`${claimLink.pathname}${claimLink.search}`);
     await expect(claimer.getByTestId("claim-name")).toHaveText(gus);
     await expect(claimer.getByTestId("claim-net")).toHaveText("-$0.40");
     await claimer.getByTestId("display-name-input").fill(`Claimer-${uniq}`);
     await claimer.getByTestId("continue-btn").click();
     await claimer.getByTestId("claim-btn").click();
-    await expect(claimer).toHaveURL(new RegExp(`/room/${roomId}`), { timeout: 10_000 });
+    await expect(claimer).toHaveURL(new RegExp(`/room\\?id=${roomId}`), { timeout: 10_000 });
     await expect(claimer.getByTestId("game-over")).toBeVisible({ timeout: 10_000 });
 
     await claimer.goto("/history");
     await expect(claimer.getByTestId(`history-row-${roomId}`)).toBeVisible({ timeout: 10_000 });
 
     // The link is spent.
-    await claimer.goto(claimLink.pathname);
+    await claimer.goto(`${claimLink.pathname}${claimLink.search}`);
     await expect(claimer.getByTestId("claim-status")).toHaveText("Already claimed.");
     await host.reload();
     await expect(

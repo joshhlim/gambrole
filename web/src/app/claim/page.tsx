@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { useStoredUser } from "@/lib/auth";
 import { useCurrencySymbol } from "@/lib/preferences";
 import { money } from "@/lib/format";
 import { guestsApi, type ClaimPreview } from "@/lib/guestsApi";
 import SignInPanel from "@/components/SignInPanel";
+import { roomHref } from "@/lib/routes";
 
 const GAME_LABEL = { taidi: "Taidi", mahjong: "Mahjong" } as const;
 
@@ -19,8 +20,7 @@ function formatDate(iso: string): string {
  * Where a guest's claim link lands. The preview needs no account, so
  * someone new sees what they'd be claiming before signing up for it.
  */
-export default function ClaimPage() {
-  const { token } = useParams<{ token: string }>();
+function ClaimView({ token }: { token: string }) {
   const router = useRouter();
   const { user, checked } = useStoredUser();
   useCurrencySymbol();
@@ -47,7 +47,7 @@ export default function ClaimPage() {
     setError(null);
     try {
       const { room_id, game_type } = await guestsApi.claim(token);
-      router.replace(`/room/${room_id}?g=${game_type}`);
+      router.replace(roomHref(room_id, game_type));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Couldn't claim this game.");
       setBusy(false);
@@ -132,5 +132,21 @@ export default function ClaimPage() {
         </div>
       )}
     </main>
+  );
+}
+
+/** ?token= carries what used to be the path segment (see lib/routes.ts);
+ * keyed on it so a different one starts fresh. useSearchParams() can't run
+ * during prerender, hence the Suspense boundary. */
+function ClaimViewFromQuery() {
+  const token = useSearchParams().get("token") ?? "";
+  return <ClaimView key={token} token={token} />;
+}
+
+export default function ClaimPage() {
+  return (
+    <Suspense fallback={null}>
+      <ClaimViewFromQuery />
+    </Suspense>
   );
 }

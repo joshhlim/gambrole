@@ -11,6 +11,7 @@ import { useProfiles } from "@/lib/useProfiles";
 import type { AnyRoomState } from "@/lib/types";
 import Avatar from "@/components/Avatar";
 import type { RoomProblemKind } from "./useRoom";
+import { groupHref, roomHref } from "@/lib/routes";
 
 /** Full-screen stand-in for a room that can't be shown at all. */
 export function RoomProblem({ kind }: { kind: Exclude<RoomProblemKind, "offline"> }) {
@@ -105,7 +106,7 @@ export function RoomFrame({
     setGoing(true);
     const active = await api.activeRoom().catch(() => null);
     const g = active?.room_id === blockedBy ? active.game_type : undefined;
-    router.push(`/room/${blockedBy}${g ? `?g=${g}` : ""}`);
+    router.push(roomHref(blockedBy, g));
   }
 
   return (
@@ -119,9 +120,9 @@ export function RoomFrame({
         >
           ←
         </button>
-        {groupName && (
+        {groupId && groupName && (
           <Link
-            href={`/groups/${groupId}`}
+            href={groupHref(groupId)}
             data-testid="room-group-name"
             className="min-w-0 flex-1 truncate text-center text-xs font-semibold uppercase tracking-widest text-muted"
           >

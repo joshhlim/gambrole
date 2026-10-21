@@ -58,5 +58,5 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * [a-z0-9_] only, and an id always has hyphens.
  */
 export function profileHref(u: { user_id: string; username?: string | null }): string {
-  return `/u/${u.username ?? u.user_id}`;
+  return `/u?handle=${encodeURIComponent(u.username ?? u.user_id)}`;
 }

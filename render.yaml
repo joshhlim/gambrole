@@ -55,4 +55,4 @@ services:
       - key: TAIDI_SUPABASE_JWT_SECRET
         sync: false # Supabase project settings → API → "JWT Secret" / "Legacy JWT Secret" — set this instead if your project has one (older projects). Leave both blank only if neither applies.
       - key: TAIDI_CORS_ORIGINS
-        sync: false # JSON array, e.g. ["https://your-app.vercel.app"] — required; without it only localhost origins are allowed
+        sync: false # JSON array, e.g. ["https://your-app.vercel.app","capacitor://localhost"] — required; without it only localhost origins are allowed. capacitor://localhost is the iOS app.
