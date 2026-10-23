@@ -215,6 +215,29 @@ def _display_name_from_claims(claims: dict[str, Any]) -> str:
     return name or "Player"
 
 
+# Access tokens outlive the sign-in by up to an hour, and get_current_user
+# deliberately doesn't touch the database (it's ~110ms away). So accounts
+# deleted by this process (account_service) are remembered here for longer
+# than any token lives, and refused. One process today (render.yaml); with
+# several, each would only know its own deletions — but the users row can't
+# be revived either way (users_service.ensure_user).
+_TOKEN_LIFETIME_S = 2 * 60 * 60
+_recently_deleted: dict[UUID, float] = {}
+
+
+def remember_deleted(user_id: UUID) -> None:
+    now = time.monotonic()
+    for uid, expires in list(_recently_deleted.items()):
+        if expires < now:
+            del _recently_deleted[uid]
+    _recently_deleted[user_id] = now + _TOKEN_LIFETIME_S
+
+
+def _was_deleted(user_id: UUID) -> bool:
+    expires = _recently_deleted.get(user_id)
+    return expires is not None and expires >= time.monotonic()
+
+
 async def get_current_user(
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> CurrentUser:
@@ -225,6 +248,8 @@ async def get_current_user(
         user_id = UUID(str(claims["sub"]))
     except ValueError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token subject.") from e
+    if _was_deleted(user_id):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This account was deleted.")
     return CurrentUser(
         user_id=user_id,
         display_name=_display_name_from_claims(claims),

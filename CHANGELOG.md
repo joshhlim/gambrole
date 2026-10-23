@@ -7,6 +7,17 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Delete your account** (Settings → Delete account; App Store guideline
+  5.1.1(v)). `DELETE /users/me` removes everything personal — name,
+  username, email, bio, city, photo, preferences, friendships, group
+  memberships (ownership passes to the longest-standing member), and the
+  Supabase sign-in — in one transaction that only commits once the sign-in
+  is gone. Past games stay, with the player shown as "Deleted player": the
+  name in their own `player_joined` events is overwritten, the one
+  deliberate exception to the append-only log (personal data, never game
+  data). Refused mid-game or with any unsettled debt. A deleted account's
+  leftover tokens are refused, and its row can't be revived. Needs the new
+  `TAIDI_SUPABASE_SERVICE_ROLE_KEY` on Render in supabase mode.
 - **Guest players.** The host can seat people without an account (both
   games) and enter their turns from one phone (`as_player`). Debts with a
   guest settle one-sided (`POST /debts/{id}/settle`). After the game, each

@@ -5,6 +5,7 @@ import {
   getStoredAuth,
   isLocalAuth,
   localAuthRequest,
+  signOut,
   storeLocalSession,
   supabase,
 } from "./auth";
@@ -57,4 +58,14 @@ export async function getAccountEmail(): Promise<string | null> {
   if (!supabase) return null;
   const { data } = await supabase.auth.getUser();
   return data.user?.email ?? null;
+}
+
+/** Deletes the account for good (the API's DELETE /users/me: everything
+ * personal goes, past games stay under "Deleted player"), then signs this
+ * device out. Throws the API's reason when it's refused — mid-game, or
+ * with debts still open. */
+export async function deleteAccount(): Promise<void> {
+  await request<void>("/users/me", { method: "DELETE" });
+  // The sign-in is already gone server-side; this just clears it here.
+  await signOut().catch(() => {});
 }

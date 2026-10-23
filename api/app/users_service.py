@@ -147,6 +147,9 @@ async def ensure_user(session: AsyncSession, user: CurrentUser) -> None:
                     # email just because someone signed in another way.
                     "email": func.coalesce(stmt.excluded.email, users_table.c.email),
                 },
+                # A deleted account stays deleted: a token issued before the
+                # deletion mustn't write its old name back.
+                where=users_table.c.deleted_at.is_(None),
             ).returning(users_table.c.username)
         )
     ).first()

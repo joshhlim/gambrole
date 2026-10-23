@@ -106,6 +106,9 @@ class Device:
     async def delete(self, url: str, **kw):
         return await self._client.delete(url, headers=self._headers, **kw)
 
+    async def patch(self, url: str, **kw):
+        return await self._client.patch(url, headers=self._headers, **kw)
+
 
 @pytest_asyncio.fixture
 async def make_device(client: AsyncClient):
