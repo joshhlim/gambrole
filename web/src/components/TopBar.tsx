@@ -3,11 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { request } from "@/lib/api";
-import { signOut, useStoredUser } from "@/lib/auth";
+import { useStoredUser } from "@/lib/auth";
 import { money } from "@/lib/format";
-import { loadMe, setMe, useMe } from "@/lib/me";
+import { loadMe, useMe } from "@/lib/me";
 import { useCurrencySymbol } from "@/lib/preferences";
-import { profileHref } from "@/lib/profileApi";
 import Avatar from "./Avatar";
 
 interface Notification {
@@ -82,20 +81,6 @@ function BellIcon() {
   );
 }
 
-function ChevronIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="m6 9 6 6 6-6"
-        stroke="currentColor"
-        strokeWidth="2.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 /** The home hero's tile at bar size. Just the mark — the wordmark next to
  *  it would crowd a 56px strip and it's already on the page you land on. */
 function Logo() {
@@ -124,13 +109,13 @@ const item =
 const BELL_TTL_MS = 5000;
 
 /**
- * The one fixed thing on screen: logo, bell, your handle.
+ * The fixed strip at the top: logo, bell, your handle.
  *
  * Mounted in the root layout rather than per page, and deliberately
  * outside RouteTransition — pages slide underneath it, it doesn't travel
- * with them. Everything account-shaped (your stats, your games, your
- * debts, settings, signing out) hangs off your name; everything waiting
- * on you hangs off the bell; the logo is always the way home.
+ * with them. Everything waiting on you hangs off the bell; your handle is
+ * the way to the Me tab (where the old account menu's contents now live,
+ * alongside the bottom TabBar); the logo is always the way home.
  */
 export default function TopBar() {
   const router = useRouter();
@@ -147,39 +132,10 @@ export default function TopBar() {
   // place, so a new photo shows here the moment it's saved.
   const me = useMe();
   useCurrencySymbol();
-  const [menuOpen, setMenuOpen] = useState(false);
   const [bellOpen, setBellOpen] = useState(false);
   const fetched = useRef<{ userId: string; at: number } | null>(null);
   const [scrolled, setScrolled] = useState(false);
-  const menuRef = useDismiss(menuOpen, () => setMenuOpen(false));
   const bellRef = useDismiss(bellOpen, () => setBellOpen(false));
-  const accountBtnRef = useRef<HTMLButtonElement>(null);
-  const menuPanelRef = useRef<HTMLDivElement>(null);
-
-  // A menu opened from the keyboard should be usable from the keyboard:
-  // focus lands on its first item, arrows move, Escape hands focus back.
-  useEffect(() => {
-    if (menuOpen) menuPanelRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-  }, [menuOpen]);
-
-  function onMenuKey(e: React.KeyboardEvent<HTMLDivElement>) {
-    const items = Array.from(
-      e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]'),
-    );
-    const at = items.indexOf(document.activeElement as HTMLElement);
-    const move = (i: number) => {
-      e.preventDefault();
-      items[(i + items.length) % items.length]?.focus();
-    };
-    if (e.key === "ArrowDown") move(at + 1);
-    else if (e.key === "ArrowUp") move(at - 1);
-    else if (e.key === "Home") move(0);
-    else if (e.key === "End") move(items.length - 1);
-    else if (e.key === "Escape") {
-      setMenuOpen(false);
-      accountBtnRef.current?.focus();
-    }
-  }
 
   const mine = loaded && user && loaded.userId === user.user_id ? loaded : null;
   const profile = me;
@@ -231,7 +187,6 @@ export default function TopBar() {
   if (!checked || !user) return null;
 
   const go = (href: string) => {
-    setMenuOpen(false);
     setBellOpen(false);
     router.push(href);
   };
@@ -242,7 +197,7 @@ export default function TopBar() {
     // translucent ground keeps content legible as it passes underneath.
     <header
       data-testid="top-bar"
-      className={`sticky top-0 z-30 border-b transition-colors duration-200 ${
+      className={`sticky top-[env(safe-area-inset-top)] z-30 border-b transition-colors duration-200 ${
         scrolled
           ? "border-border/60 bg-background/80 backdrop-blur"
           : "border-transparent"
@@ -262,7 +217,6 @@ export default function TopBar() {
             <button
               onClick={() => {
                 setBellOpen(!bellOpen);
-                setMenuOpen(false);
               }}
               data-testid="bell-btn"
               aria-haspopup="true"
@@ -303,113 +257,31 @@ export default function TopBar() {
             )}
           </div>
 
-          <div ref={menuRef}>
-            <button
-              ref={accountBtnRef}
-              onClick={() => {
-                setMenuOpen(!menuOpen);
-                setBellOpen(false);
-              }}
-              data-testid="account-btn"
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              aria-controls="account-menu"
-              className="flex h-11 items-center gap-1.5 rounded-full pl-1 text-brand"
-            >
-              {profile ? (
-                <Avatar
-                  name={profile.display_name}
-                  url={profile.avatar_url}
-                  accent={profile.accent}
-                  size={28}
-                />
-              ) : (
-                <span aria-hidden className="h-7 w-7 shrink-0 animate-pulse rounded-full bg-border" />
-              )}
-              <span
-                data-testid="account-name"
-                className="max-w-28 truncate text-sm font-semibold"
-              >
-                {profile?.username
-                  ? `@${profile.username}`
-                  : (profile?.display_name ?? "…")}
-              </span>
-              <ChevronIcon />
-            </button>
-            {menuOpen && (
-              <div
-                id="account-menu"
-                ref={menuPanelRef}
-                role="menu"
-                className={panel}
-                data-testid="account-menu"
-                onKeyDown={onMenuKey}
-              >
-                {profile && (
-                  <button
-                    onClick={() => go(profileHref(profile))}
-                    data-testid="menu-profile"
-                    role="menuitem"
-                    className={`${item} border-b border-border`}
-                  >
-                    <span className="block truncate font-semibold">{profile.display_name}</span>
-                    <span className="block text-xs text-muted">View profile</span>
-                  </button>
-                )}
-                <button
-                  onClick={() => go("/stats")}
-                  data-testid="menu-stats"
-                  role="menuitem"
-                  className={item}
-                >
-                  My Stats
-                </button>
-                <button
-                  onClick={() => go("/history")}
-                  data-testid="menu-games"
-                  role="menuitem"
-                  className={item}
-                >
-                  My Games
-                </button>
-                <button
-                  onClick={() => go("/debts")}
-                  data-testid="menu-debts"
-                  role="menuitem"
-                  className={item}
-                >
-                  My Debts
-                </button>
-                <button
-                  onClick={() => go("/settings")}
-                  data-testid="menu-settings"
-                  role="menuitem"
-                  className={item}
-                >
-                  Settings
-                </button>
-                <button
-                  onClick={async () => {
-                    await signOut();
-                    setMenuOpen(false);
-                    setLoaded(null);
-                    setMe(null);
-                    fetched.current = null;
-                    // signOut announces itself (see lib/auth.ts), so this
-                    // bar and the home page both drop the session on their
-                    // own — no reload needed to clear a component that
-                    // now outlives every navigation.
-                    router.push("/");
-                  }}
-                  data-testid="menu-sign-out"
-                  role="menuitem"
-                  className={`${item} border-t border-border text-muted`}
-                >
-                  Sign out
-                </button>
-              </div>
+          <button
+            onClick={() => go("/me")}
+            data-testid="account-btn"
+            aria-label="Me"
+            className="flex h-11 items-center gap-1.5 rounded-full pl-1 text-brand"
+          >
+            {profile ? (
+              <Avatar
+                name={profile.display_name}
+                url={profile.avatar_url}
+                accent={profile.accent}
+                size={28}
+              />
+            ) : (
+              <span aria-hidden className="h-7 w-7 shrink-0 animate-pulse rounded-full bg-border" />
             )}
-          </div>
+            <span
+              data-testid="account-name"
+              className="max-w-28 truncate text-sm font-semibold"
+            >
+              {profile?.username
+                ? `@${profile.username}`
+                : (profile?.display_name ?? "…")}
+            </span>
+          </button>
         </div>
       </div>
     </header>

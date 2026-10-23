@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Capacitor } from "@capacitor/core";
+import { useEffect, useRef, useState } from "react";
 import { requestPasswordReset, signInWithPassword, signUpWithPassword, type CurrentUser } from "@/lib/auth";
 import { friendsApi } from "@/lib/friendsApi";
 import { ApiError } from "@/lib/api";
@@ -20,6 +21,14 @@ export default function SupabaseAuthForm({
   const [view, setView] = useState<View>("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  // Focused from here, not with autoFocus: the page is prerendered as a
+  // website, so an autoFocus attribute would be baked into the HTML and
+  // fire in the iOS app too — where a keyboard springing up on the very
+  // first screen, before you've looked at anything, feels pushy.
+  const loginEmailRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) loginEmailRef.current?.focus();
+  }, []);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [username, setUsername] = useState("");
@@ -173,7 +182,7 @@ export default function SupabaseAuthForm({
             className={inputCls}
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            autoFocus
+            ref={loginEmailRef}
           />
           <input
             type="password"

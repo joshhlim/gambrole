@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { getAccountEmail, updateDisplayName, updateEmail, updatePassword } from "@/lib/account";
+import { deleteAccount, getAccountEmail, updateDisplayName, updateEmail, updatePassword } from "@/lib/account";
 import { passwordAuth, signOut, useStoredUser, type CurrentUser } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
 import { friendsApi } from "@/lib/friendsApi";
@@ -23,6 +23,7 @@ import { profileApi, profileHref, type PreferencesUpdate } from "@/lib/profileAp
 import { describeMahjongRules, describeTaidiRules } from "@/lib/rulesSummary";
 import { forgetProfile } from "@/lib/useProfiles";
 import Avatar, { accentColor } from "@/components/Avatar";
+import { ConfirmAction } from "@/components/ConfirmAction";
 
 const inputCls =
   "w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground outline-none focus:border-brand-strong";
@@ -186,7 +187,7 @@ export default function SettingsPage() {
     <main className="mx-auto w-full max-w-md flex-1 px-5 py-8">
       <div className="mb-8 flex items-center gap-3">
         <button
-          onClick={() => router.push("/")}
+          onClick={() => router.push("/me")}
           data-testid="back-btn"
           aria-label="Back"
           className="flex h-11 w-11 items-center justify-center rounded-full border border-border text-lg font-bold text-brand"
@@ -205,6 +206,7 @@ export default function SettingsPage() {
           <DefaultsSection me={me} />
           <PrivacySection me={me} />
           <AccountSection user={user} onSignedOut={() => router.push("/")} />
+          <DeleteAccountSection onDeleted={() => router.replace("/")} />
         </div>
       )}
     </main>
@@ -861,6 +863,59 @@ function AccountSection({ user, onSignedOut }: { user: CurrentUser; onSignedOut:
         >
           Sign out
         </button>
+      </div>
+    </Section>
+  );
+}
+
+function DeleteAccountSection({ onDeleted }: { onDeleted: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function confirmDelete() {
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteAccount();
+      setMe(null);
+      onDeleted();
+    } catch (e) {
+      setError(errorText(e, "Couldn't delete your account."));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Section title="Delete account" testId="settings-delete-account">
+      <div className="space-y-3 px-4 py-3">
+        <p className="text-xs leading-relaxed text-muted">
+          Removes your name, username, email, photo, bio, friends and group memberships, and your
+          sign-in. Games you played stay in the other players&apos; history, shown as &ldquo;Deleted
+          player&rdquo;. This can&apos;t be undone.
+        </p>
+        <ConfirmAction
+          label="Delete my account"
+          prompt="Delete your account for good?"
+          confirmLabel="Delete forever"
+          testIds={{
+            open: "settings-delete-account-btn",
+            confirm: "settings-delete-account-confirm",
+            cancel: "settings-delete-account-cancel",
+          }}
+          busy={busy}
+          onConfirm={confirmDelete}
+          buttonClassName="min-h-11 w-full rounded-xl border border-danger/40 text-sm font-semibold text-danger disabled:opacity-50"
+        />
+        {error && (
+          <p data-testid="settings-delete-account-error" className="text-xs text-danger">
+            {error}{" "}
+            {/debt/i.test(error) && (
+              <Link href="/debts" className="font-semibold underline">
+                Go to Debts
+              </Link>
+            )}
+          </p>
+        )}
       </div>
     </Section>
   );

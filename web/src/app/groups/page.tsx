@@ -67,17 +67,7 @@ export default function GroupsPage() {
 
   return (
     <main className="mx-auto w-full max-w-md flex-1 px-5 py-8">
-      <div className="mb-6 flex items-center gap-3">
-        <button
-          onClick={() => router.push("/")}
-          data-testid="back-btn"
-          aria-label="Back"
-          className="flex h-11 w-11 items-center justify-center rounded-full border border-border text-lg font-bold text-brand"
-        >
-          ←
-        </button>
-        <h1 className="text-lg font-extrabold text-brand">Groups</h1>
-      </div>
+      <h1 className="mb-6 font-display text-3xl font-extrabold tracking-tight text-brand">Groups</h1>
 
       <div className="space-y-6">
         {loadError ? (

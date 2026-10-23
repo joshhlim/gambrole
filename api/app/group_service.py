@@ -294,6 +294,13 @@ async def join_by_code(session: AsyncSession, user_id: UUID, code: str) -> UUID:
 
 
 async def leave(session: AsyncSession, group_id: UUID, user_id: UUID) -> None:
+    await leave_uncommitted(session, group_id, user_id)
+    await session.commit()
+
+
+async def leave_uncommitted(session: AsyncSession, group_id: UUID, user_id: UUID) -> None:
+    """leave(), as part of a bigger change the caller commits — deleting an
+    account leaves every group in the same transaction."""
     group = await _group(session, group_id)
     if group.owner_id == user_id:
         # Hand the group to the longest-standing other member, or close it
@@ -307,7 +314,7 @@ async def leave(session: AsyncSession, group_id: UUID, user_id: UUID) -> None:
             )
         ).first()
         if successor is None:
-            await _delete_group(session, group_id)
+            await _delete_group_uncommitted(session, group_id)
             return
         await session.execute(
             update(groups_table)
@@ -319,17 +326,20 @@ async def leave(session: AsyncSession, group_id: UUID, user_id: UUID) -> None:
             members_table.c.group_id == group_id, members_table.c.user_id == user_id
         )
     )
-    await session.commit()
 
 
 async def _delete_group(session: AsyncSession, group_id: UUID) -> None:
+    await _delete_group_uncommitted(session, group_id)
+    await session.commit()
+
+
+async def _delete_group_uncommitted(session: AsyncSession, group_id: UUID) -> None:
     # Its games stay in everyone's history; they just stop belonging to it.
     await session.execute(
         update(rooms_table).where(rooms_table.c.group_id == group_id).values(group_id=None)
     )
     await session.execute(delete(members_table).where(members_table.c.group_id == group_id))
     await session.execute(delete(groups_table).where(groups_table.c.group_id == group_id))
-    await session.commit()
 
 
 async def _require_owner(session: AsyncSession, group_id: UUID, user_id: UUID) -> Any:

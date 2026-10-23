@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     # Both may be set; JWKS is tried first when present.
     supabase_url: str | None = None
     supabase_jwt_secret: str | None = None
+    # Supabase project settings -> API Keys -> a "secret" key (sb_secret_…),
+    # or the legacy "service_role" key on older projects. Only used to
+    # delete a sign-in when someone deletes their account (account_service);
+    # without it, account deletion is refused in supabase mode rather than
+    # leaving a login behind that points at nothing. Server-side only.
+    supabase_service_role_key: str | None = None
 
     # :3000 is Next.js's default; :3100 is what this repo's local dev
     # and Playwright config use instead, since :3000 is often already

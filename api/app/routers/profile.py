@@ -11,6 +11,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..account_service import AccountBlocked, DeletionUnavailable, delete_account
 from ..auth import CurrentUser, get_current_user
 from ..db import get_session
 from ..db import user_avatars as avatars_table
@@ -140,6 +141,26 @@ async def delete_avatar(
     )
     await session.commit()
     return await _my_profile(session, user)
+
+
+@router.delete(
+    "/users/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(rate_limit("account-delete", 5))],
+)
+async def delete_me(
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Deletes the caller's account — see account_service for what goes and
+    what stays. 409 with the reason when it would strand someone else."""
+    try:
+        await delete_account(session, user.user_id)
+    except AccountBlocked as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
+    except DeletionUnavailable as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e)) from e
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/avatars/{user_id}")

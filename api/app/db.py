@@ -156,6 +156,10 @@ users = Table(
     Column("profile_visibility", String(16), nullable=False, server_default="everyone"),
     Column("stats_visibility", String(16), nullable=False, server_default="friends"),
     Column("searchable", Boolean, nullable=False, server_default=true()),
+    # Set when the account is deleted (account_service). The row stays, as
+    # "Deleted player" with nothing personal left, so past games still have
+    # someone to point at.
+    Column("deleted_at", DateTime(timezone=True), nullable=True),
     Index("ix_users_email", "email"),
 )
 

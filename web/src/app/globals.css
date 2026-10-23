@@ -114,6 +114,40 @@
 body {
   background: var(--background);
   color: var(--foreground);
+  /* Clear of the status bar and home indicator — zero in a browser tab,
+     the notch's height in the iOS app (viewportFit: "cover"). */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Inside the iOS app only (html.native, set before paint by NATIVE_SCRIPT):
+   stop the web tells — the grey flash on tap, long-press callouts, text
+   that selects when you meant to press a button, and the 300ms wait for
+   a double-tap that will never zoom. Fields and anything opted in with
+   .selectable stay selectable. */
+html.native {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+html.native body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+html.native :is(input, textarea, [contenteditable="true"], .selectable) {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* A solid strip behind the status bar, so pages scrolling up don't run
+   under the clock. Zero height wherever there's no inset. */
+.status-bar-shield {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: env(safe-area-inset-top);
+  background: var(--background);
+  z-index: 40;
 }
 
 /* iOS Safari zooms the whole page into any field whose text is under

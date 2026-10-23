@@ -3,10 +3,12 @@ import { Geist, Geist_Mono, Outfit } from "next/font/google";
 import "./globals.css";
 import RouteTransition from "@/components/RouteTransition";
 import Backdrop from "@/components/Backdrop";
+import BottomTabBar from "@/components/BottomTabBar";
+import NativeShell from "@/components/NativeShell";
 import TopBar from "@/components/TopBar";
 import PreferencesSync from "@/components/PreferencesSync";
 import Onboarding from "@/components/Onboarding";
-import { THEME_COLORS, THEME_SCRIPT } from "@/lib/themeScript";
+import { NATIVE_SCRIPT, THEME_COLORS, THEME_SCRIPT } from "@/lib/themeScript";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,6 +37,11 @@ export const metadata: Metadata = {
 // Both schemes, so the browser bar matches before any script runs; the
 // theme script then overrides both with the account's own choice.
 export const viewport: Viewport = {
+  // Lets the page see the notch and home indicator (env(safe-area-inset-*),
+  // see globals.css). The iOS app draws the page under the status bar, so
+  // without it the top bar sat behind the clock. In a browser tab the
+  // insets are zero and nothing changes.
+  viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: THEME_COLORS.light },
     { media: "(prefers-color-scheme: dark)", color: THEME_COLORS.dark },
@@ -53,16 +60,20 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        <script dangerouslySetInnerHTML={{ __html: NATIVE_SCRIPT }} />
       </head>
       <body className="min-h-full flex flex-col bg-background text-foreground">
         <Backdrop />
+        <div aria-hidden className="status-bar-shield" />
         {/* Outside RouteTransition on purpose: the bar is the one fixed
             point on every screen, so pages slide underneath it rather
             than carrying it along. It hides itself when signed out. */}
         <TopBar />
         <RouteTransition>{children}</RouteTransition>
+        <BottomTabBar />
         <PreferencesSync />
         <Onboarding />
+        <NativeShell />
       </body>
     </html>
   );
