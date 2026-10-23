@@ -535,7 +535,7 @@ function StatsView({ viewing }: { viewing: string | null }) {
     <main className="mx-auto w-full max-w-md flex-1 px-5 py-8">
       <div className="mb-5 flex items-center gap-3">
         <button
-          onClick={() => router.push(viewing ? "/friends" : "/")}
+          onClick={() => router.push(viewing ? "/friends" : "/me")}
           data-testid="back-btn"
           className="flex h-11 w-11 items-center justify-center rounded-full border border-border text-lg font-bold text-brand"
         >

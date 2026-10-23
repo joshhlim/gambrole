@@ -186,7 +186,7 @@ export default function SettingsPage() {
     <main className="mx-auto w-full max-w-md flex-1 px-5 py-8">
       <div className="mb-8 flex items-center gap-3">
         <button
-          onClick={() => router.push("/")}
+          onClick={() => router.push("/me")}
           data-testid="back-btn"
           aria-label="Back"
           className="flex h-11 w-11 items-center justify-center rounded-full border border-border text-lg font-bold text-brand"

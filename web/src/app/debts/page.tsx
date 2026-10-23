@@ -279,16 +279,7 @@ export default function DebtsPage() {
 
   return (
     <main className="flex-1 px-5 py-8 max-w-md mx-auto w-full">
-      <div className="flex items-center gap-3 mb-6">
-        <button
-          onClick={() => router.push("/")}
-          data-testid="back-btn"
-          className="h-11 w-11 rounded-full border border-border flex items-center justify-center text-lg font-bold text-brand"
-        >
-          ←
-        </button>
-        <h1 className="text-lg font-extrabold text-brand">My Debts</h1>
-      </div>
+      <h1 className="mb-6 font-display text-3xl font-extrabold tracking-tight text-brand">Debts</h1>
 
       {(error || actionError) && (
         <p

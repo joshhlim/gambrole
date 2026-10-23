@@ -3,6 +3,7 @@ import { Geist, Geist_Mono, Outfit } from "next/font/google";
 import "./globals.css";
 import RouteTransition from "@/components/RouteTransition";
 import Backdrop from "@/components/Backdrop";
+import BottomTabBar from "@/components/BottomTabBar";
 import NativeShell from "@/components/NativeShell";
 import TopBar from "@/components/TopBar";
 import PreferencesSync from "@/components/PreferencesSync";
@@ -69,6 +70,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             than carrying it along. It hides itself when signed out. */}
         <TopBar />
         <RouteTransition>{children}</RouteTransition>
+        <BottomTabBar />
         <PreferencesSync />
         <Onboarding />
         <NativeShell />

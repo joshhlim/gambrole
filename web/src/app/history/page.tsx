@@ -91,7 +91,7 @@ export default function HistoryPage() {
     <main className="flex-1 px-5 py-8 max-w-md mx-auto w-full">
       <div className="flex items-center gap-3 mb-6">
         <button
-          onClick={() => router.push("/")}
+          onClick={() => router.push("/me")}
           data-testid="back-btn"
           className="h-11 w-11 rounded-full border border-border flex items-center justify-center text-lg font-bold text-brand"
         >

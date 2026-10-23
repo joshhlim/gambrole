@@ -144,25 +144,51 @@ test("my stats shows an empty state for a brand-new player", async ({ page }) =>
   await expect(page.getByTestId("stats-empty")).toBeVisible();
 });
 
-test("top-bar dropdowns fit a 320px phone", async ({ browser }) => {
+test("the bell panel and the tab bar fit a 320px phone", async ({ browser }) => {
   const ctx = await browser.newContext({ viewport: { width: 320, height: 640 } });
   const page = await ctx.newPage();
+  const fits = async (testId: string) => {
+    const box = await page.getByTestId(testId).boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(320);
+  };
   try {
     await login(page, `Narrow-${Date.now().toString(36)}`);
-    for (const [btn, panel] of [
-      ["account-btn", "account-menu"],
-      ["bell-btn", "bell-panel"],
-    ]) {
-      await page.getByTestId(btn).click();
-      const box = await page.getByTestId(panel).boundingBox();
-      expect(box).not.toBeNull();
-      expect(box!.x).toBeGreaterThanOrEqual(0);
-      expect(box!.x + box!.width).toBeLessThanOrEqual(320);
-      await page.keyboard.press("Escape");
-    }
+    await page.getByTestId("bell-btn").click();
+    await fits("bell-panel");
+    await page.keyboard.press("Escape");
+    await fits("tab-bar");
+    for (const tab of ["home", "groups", "play", "debts", "me"]) await fits(`tab-${tab}`);
   } finally {
     await ctx.close();
   }
+});
+
+test("the tab bar reaches every tab, and Me holds the account pages", async ({ page }) => {
+  await login(page, `Tabs-${Date.now().toString(36)}`);
+  for (const [tab, url] of [
+    ["groups", /\/groups$/],
+    ["debts", /\/debts$/],
+    ["me", /\/me$/],
+    ["play", /\/play$/],
+    ["home", /\/$/],
+  ] as const) {
+    await page.getByTestId(`tab-${tab}`).click();
+    await expect(page).toHaveURL(url);
+    if (tab !== "play") await expect(page.getByTestId(`tab-${tab}`)).toHaveAttribute("aria-current", "page");
+  }
+  // Full-screen flows have their own way out and no tab bar.
+  await page.getByTestId("tab-play").click();
+  await page.getByTestId("create-room-option").click();
+  await expect(page).toHaveURL(/\/new/);
+  await expect(page.getByTestId("tab-bar")).toHaveCount(0);
+
+  await page.getByTestId("account-btn").click();
+  await expect(page).toHaveURL(/\/me$/);
+  await page.getByTestId("menu-sign-out").click();
+  await expect(page.getByTestId("tab-bar")).toHaveCount(0);
+  await expect(page.getByTestId("display-name-input")).toBeVisible();
 });
 
 test("a member can leave a lobby, and the host can disband it", async ({ browser }) => {
