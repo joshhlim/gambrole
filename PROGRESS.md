@@ -201,8 +201,7 @@ again later without touching history.
   `gambrole-api-sg` (https://gambrole-api-sg.onrender.com), since Render
   can't move a service between regions. A request with a DB lookup went
   from ~1.15s to ~0.12s. Vercel's `NEXT_PUBLIC_API_URL` and keep-warm point
-  at it. The old `gambrole-api` service is to be deleted by the user once
-  the new one has been tested. Maybe later, only if polling still feels
+  at it. The old Oregon `gambrole-api` service was deleted (2026-10-21). Maybe later, only if polling still feels
   slow: a per-process folded-state cache plus "unchanged since seq N"
   poll responses.
 - Whole-codebase audit pass (2026-09-28, see CHANGELOG [Unreleased]) is
@@ -218,9 +217,7 @@ again later without touching history.
     checksPass` and `PYTHON_VERSION`. Note checksPass means a red CI on
     main now blocks API deploys.
   - Turn on Dependabot alerts, secret scanning and branch protection
-    (repo is public); close the Dependabot PRs superseded by the new
-    grouped config.
-  - Delete the old Oregon `gambrole-api` Render service.
+    (repo is public). (The old Dependabot PRs were closed 2026-10-21.)
   - Decide whether to retire the legacy Streamlit app (now hardened: admin
     actions hidden without `APP_PASSCODE`, throttled passcode).
   - Vercel builds now fail if `NEXT_PUBLIC_API_URL` is unset — make sure
@@ -240,9 +237,54 @@ again later without touching history.
   Render), dark mode, first-run walkthrough. Decisions the user made: guests
   are run from the host's phone and claimable later; presets keep the same
   money at $0.50/chip; profile = photo, bio, accent, city, public page;
-  settings = theme, default rules, privacy, currency symbol. Next on the
-  app-store roadmap (not started): Capacitor wrapper, push notifications,
-  in-app account deletion, legal pages, paid hosting, error reporting.
+  settings = theme, default rules, privacy, currency symbol. (The
+  app-store roadmap that followed is the iOS app entry below.)
 - Deliberately not done in the audit pass: lazy-loading supabase-js (the
   password-recovery listener needs the client at module load), Sentry-style
   error reporting (needs an account), API versioning.
+- iOS app (2026-10-16 → 10-23). Auth is back on `supabase` everywhere
+  (render.yaml + Vercel). The web app is a static export (`output:
+  "export"`): ids moved from path segments to the query string
+  (`/room?id=`, `/group?id=`, `/u?handle=`, `/groups/join?code=`,
+  `/claim?token=`; `lib/routes.ts`), with `web/vercel.json` redirecting
+  the old paths. Capacitor 8 wraps it (`web/ios`, SPM, app id
+  `com.joshhlim.gambrole`); `npm run build:app` builds with `web/.env.app`
+  (gitignored — production API/Supabase + `NEXT_PUBLIC_SITE_URL`) and
+  copies into Xcode. `capacitor://localhost` is in TAIDI_CORS_ORIGINS.
+  Things that bit, worth knowing before touching them:
+  - In the app the Supabase client uses localStorage, not cookies
+    (`lib/auth.ts`): the web view drops cookies for `capacitor://`, which
+    signed people out on their first navigation.
+  - Capacitor serves `/index.html` for any extensionless path, so a full
+    page load of `/play` shows the home page's prerendered HTML. Client
+    navigation is fine; avoid hard navigations.
+  - Prerendered HTML can't know it's in the app: `autoFocus` and anything
+    else decided by `Capacitor.isNativePlatform()` must happen in an
+    effect, or it's baked in for both. `NATIVE_SCRIPT` (themeScript.ts)
+    marks `html.native` before paint for app-only CSS.
+  - The Simulator runtime: Xcode 27.1 shipped before Apple's catalog had
+    a 27.1 runtime — `xcodebuild -downloadPlatform iOS -buildVersion
+    27.0`.
+  Native feel (all no-ops in a browser): icon + light/dark splash from the
+  in-app logo, splash held until the auth check, status bar follows the
+  theme, keyboard accessory bar hidden, haptics (lib/native.ts; every
+  tap, room actions in useRoom's run(), game end), no tap
+  highlight/callouts/selection/zoom, swipe-back (`MainViewController` in
+  AppDelegate.swift — not confirmed on a device yet), pull-to-refresh
+  (re-mounts the page via RouteTransition's key). Web too: bottom tab bar
+  Home · Groups · Play · Debts · Me (`BottomTabBar`; hidden on
+  `isImmersive` routes), Me page replacing the account dropdown, Home as a
+  dashboard, confetti + shareable results card at game end
+  (`GameMoments.tsx`).
+  Account deletion (`account_service.py`, DELETE /users/me, Settings):
+  anonymises to "Deleted player", overwriting the name in the player's own
+  `player_joined` events — the one deliberate exception to the
+  append-only log. Refused mid-game or with unsettled debts. Needs
+  TAIDI_SUPABASE_SERVICE_ROLE_KEY on Render (a new-style `sb_secret_` key
+  goes on the `apikey` header only); set by the user 2026-10-23.
+  Still to do before App Store submission: privacy policy / terms /
+  support pages, report + block (guideline 1.2 — user deferred it),
+  testing on a real iPhone, then the paid items (Apple Developer Program
+  for TestFlight/push, paid Render + Supabase, a domain). Free roadmap
+  after that: realtime instead of 1.5s polling, room-state caching, QR
+  join, recaps, group seasons.
