@@ -114,6 +114,20 @@
 body {
   background: var(--background);
   color: var(--foreground);
+  /* Clear of the status bar and home indicator — zero in a browser tab,
+     the notch's height in the iOS app (viewportFit: "cover"). */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* A solid strip behind the status bar, so pages scrolling up don't run
+   under the clock. Zero height wherever there's no inset. */
+.status-bar-shield {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: env(safe-area-inset-top);
+  background: var(--background);
+  z-index: 40;
 }
 
 /* iOS Safari zooms the whole page into any field whose text is under

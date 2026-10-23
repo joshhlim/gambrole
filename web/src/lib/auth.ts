@@ -1,7 +1,8 @@
 "use client";
 
+import { Capacitor } from "@capacitor/core";
 import { createBrowserClient } from "@supabase/ssr";
-import type { Session, User } from "@supabase/supabase-js";
+import { createClient, type Session, type User } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
 
 import { API_URL, API_URL_MISSING, siteUrl } from "./config";
@@ -49,9 +50,16 @@ const LOCAL = AUTH_MODE === "local";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+// createBrowserClient keeps the session in cookies, and the iOS app's web
+// view drops cookies for its capacitor:// origin — every page after the
+// first would find no session and bounce you to sign-in. The app keeps it
+// in localStorage instead; the website stays on cookies so nobody there is
+// signed out by the change.
 export const supabase =
   AUTH_MODE === "supabase" && SUPABASE_URL && SUPABASE_ANON_KEY
-    ? createBrowserClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    ? Capacitor.isNativePlatform()
+      ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+      : createBrowserClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null;
 
 /** True when sign-in is by email + password — Supabase or local mode. The

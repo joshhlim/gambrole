@@ -242,7 +242,7 @@ export default function TopBar() {
     // translucent ground keeps content legible as it passes underneath.
     <header
       data-testid="top-bar"
-      className={`sticky top-0 z-30 border-b transition-colors duration-200 ${
+      className={`sticky top-[env(safe-area-inset-top)] z-30 border-b transition-colors duration-200 ${
         scrolled
           ? "border-border/60 bg-background/80 backdrop-blur"
           : "border-transparent"
