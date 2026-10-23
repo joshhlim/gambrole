@@ -6,6 +6,7 @@ import { api, ApiError } from "@/lib/api";
 import { readFreshState } from "@/lib/freshState";
 import { usePolling } from "@/lib/usePolling";
 import type { AnyRoomState } from "@/lib/types";
+import { hapticCommit, hapticError } from "@/lib/native";
 
 /** Why the room can't be shown. "offline" keeps the last state on screen;
  * the other two replace it (see RoomProblem). */
@@ -139,6 +140,8 @@ export function useRoom<S extends AnyRoomState>({
         try {
           const result = await action(current);
           if (apply) setData(result);
+          // Felt, not just seen: the table is often passed round one phone.
+          hapticCommit();
           return result;
         } catch (e) {
           const fresh = e instanceof ApiError && e.conflict ? narrow(e.conflict.state) : null;
@@ -157,6 +160,7 @@ export function useRoom<S extends AnyRoomState>({
                   : "Something went wrong.",
             );
           }
+          hapticError();
           return null;
         }
       }

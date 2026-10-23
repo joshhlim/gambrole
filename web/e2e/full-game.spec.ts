@@ -101,6 +101,14 @@ test("a full game across three simulated devices", async ({ browser }) => {
       await expect(p.getByText(/rounds? played/)).toBeVisible();
       await expect(p.getByTestId("standing-row")).toHaveCount(3);
     }
+
+    // The results card: no share sheet in a desktop browser, so it downloads.
+    const download = alice.waitForEvent("download");
+    await alice.getByTestId("share-results-btn").click();
+    const file = await download;
+    expect(file.suggestedFilename()).toBe("gambrole-results.png");
+    const bytes = await (await file.createReadStream()).toArray();
+    expect(Buffer.concat(bytes).subarray(1, 4).toString()).toBe("PNG");
   } finally {
     await close();
   }

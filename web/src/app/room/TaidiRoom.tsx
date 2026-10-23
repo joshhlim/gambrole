@@ -12,6 +12,7 @@ import { PlayerLabel, RoomFrame, RoomLoading, RoomProblem, RulesLine, useRoomPro
 import { useCurrencySymbol } from "@/lib/preferences";
 import type { UserProfile } from "@/lib/friendsTypes";
 import { ActingAs, AddGuestForm, GuestLinks, GuestTag } from "./Guests";
+import { EndMoment, ShareResultsButton, useJustEnded, type ResultsCard } from "@/components/GameMoments";
 
 type RoomState = TaidiRoomState;
 
@@ -57,6 +58,7 @@ export default function TaidiRoom({
   const guests = useMemo(() => membersBySeat.filter((m) => m.is_guest), [membersBySeat]);
   const profiles = useRoomProfiles(state);
   useCurrencySymbol();
+  const justEnded = useJustEnded(state?.status);
 
   if (problem === "not-found" || problem === "forbidden") return <RoomProblem kind={problem} />;
   if (!state) return <RoomLoading offline={problem === "offline"} />;
@@ -166,12 +168,19 @@ export default function TaidiRoom({
 
       {state.status === "ended" && (
         <div className="space-y-6">
+          <EndMoment justEnded={justEnded} won={(state.balances[me] ?? 0) > 0} />
           <EndedView
             standings={standings}
             nameOf={nameOf}
             profiles={profiles}
             roundsPlayed={state.rounds.length}
             onHome={() => router.push("/")}
+            share={{
+              game: "taidi",
+              played: `${state.rounds.length} round${state.rounds.length === 1 ? "" : "s"}`,
+              endedAt: state.ended_at,
+              standings: standings.map(([id, cents]) => ({ name: nameOf(id), cents })),
+            }}
           />
           {isHost && <GuestLinks roomId={roomId} />}
           <RoundLog rounds={state.rounds} me={me} nameOf={nameOf} />
@@ -826,12 +835,14 @@ function EndedView({
   profiles,
   roundsPlayed,
   onHome,
+  share,
 }: {
   standings: [string, number][];
   nameOf: (id: string) => string;
   profiles: Record<string, UserProfile>;
   roundsPlayed: number;
   onHome: () => void;
+  share: ResultsCard;
 }) {
   const [topId, topCents] = standings[0] ?? [null, 0];
 
@@ -873,6 +884,10 @@ function EndedView({
           </div>
         ))}
       </div>
+      <ShareResultsButton
+        card={share}
+        className="w-full rounded-xl border border-border bg-surface py-3 text-sm font-semibold text-brand disabled:opacity-50"
+      />
       <button
         onClick={onHome}
         data-testid="back-to-home-btn"

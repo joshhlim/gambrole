@@ -22,6 +22,7 @@ import { useCurrencySymbol } from "@/lib/preferences";
 import type { UserProfile } from "@/lib/friendsTypes";
 import Avatar from "@/components/Avatar";
 import { ActingAs, AddGuestForm, GuestLinks, GuestTag } from "./Guests";
+import { EndMoment, ShareResultsButton, useJustEnded, type ResultsCard } from "@/components/GameMoments";
 
 function seatLabel(seat: number) {
   return SEAT_LABELS[seat];
@@ -71,6 +72,7 @@ export default function MahjongRoom({
   );
   const profiles = useRoomProfiles(state);
   useCurrencySymbol();
+  const justEnded = useJustEnded(state?.status);
 
   if (problem === "not-found" || problem === "forbidden") return <RoomProblem kind={problem} />;
   if (!state) return <RoomLoading offline={problem === "offline"} />;
@@ -132,6 +134,7 @@ export default function MahjongRoom({
 
       {state.status === "ended" && (
         <div className="space-y-6">
+          <EndMoment justEnded={justEnded} won={(state.balances[me] ?? 0) > 0} />
           <EndedView state={state} nameOf={nameOf} profiles={profiles} onHome={() => router.push("/")} />
           {isHost && <GuestLinks roomId={roomId} />}
         </div>
@@ -923,6 +926,12 @@ function EndedView({
 }) {
   const standings = Object.entries(state.balances).sort(([, a], [, b]) => b - a);
   const [topId, topNet] = standings[0] ?? [null, 0];
+  const share: ResultsCard = {
+    game: "mahjong",
+    played: `${state.hands.length} hand${state.hands.length === 1 ? "" : "s"}`,
+    endedAt: state.ended_at,
+    standings: standings.map(([id, cents]) => ({ name: nameOf(id), cents })),
+  };
 
   return (
     <div className="space-y-6">
@@ -962,6 +971,10 @@ function EndedView({
           </div>
         ))}
       </div>
+      <ShareResultsButton
+        card={share}
+        className="w-full rounded-xl border border-border bg-surface py-3 text-sm font-semibold text-brand disabled:opacity-50"
+      />
       <button
         onClick={onHome}
         data-testid="back-to-home-btn"

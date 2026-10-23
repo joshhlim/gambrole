@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Share } from "@capacitor/share";
+import { isNativeApp } from "@/lib/native";
 
 /**
  * Hands a link on: the phone's share sheet where there is one (how a link
@@ -29,6 +31,16 @@ export default function ShareLink({
   }, [copied]);
 
   async function share() {
+    // The iOS share sheet itself, via Capacitor — the web view's own
+    // navigator.share isn't reliably there.
+    if (isNativeApp()) {
+      try {
+        await Share.share({ url, title });
+      } catch {
+        // Dismissed — nothing to fall back to.
+      }
+      return;
+    }
     if (typeof navigator.share === "function") {
       try {
         await navigator.share({ url, title });
