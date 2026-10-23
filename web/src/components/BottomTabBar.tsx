@@ -2,12 +2,9 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useStoredUser } from "@/lib/auth";
+import { isImmersive } from "@/lib/routes";
 
 type TabId = "home" | "groups" | "play" | "debts" | "me";
-
-/** Screens that take the whole display — a live table, a form you're in the
- * middle of, a link you followed — have their own way out and no tab bar. */
-const IMMERSIVE = ["/room", "/new", "/play/join", "/auth", "/claim", "/groups/join"];
 
 /** Which tab a screen belongs to, so the bar shows where you are even a
  * level or two down (a group's page is still Groups). */
@@ -73,13 +70,13 @@ const BAR_H = "h-16";
 /**
  * The app's main way around: four tabs and a raised Play button in the
  * middle. Mounted once in the root layout, like the top bar; hidden when
- * signed out and on full-screen flows (IMMERSIVE).
+ * signed out and on full-screen flows (lib/routes.ts isImmersive).
  */
 export default function BottomTabBar() {
   const router = useRouter();
   const pathname = usePathname();
   const { user, checked } = useStoredUser();
-  if (!checked || !user || IMMERSIVE.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
+  if (!checked || !user || isImmersive(pathname)) {
     return null;
   }
   const current = tabFor(pathname);

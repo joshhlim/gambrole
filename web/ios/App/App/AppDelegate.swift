@@ -42,3 +42,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return config
     }
 }
+
+/// The app's one screen: Capacitor's web view, plus iOS's own swipe-from-
+/// the-left-edge to go back. The web app routes with pushState, so the
+/// web view's history is the app's navigation history, and this gesture
+/// walks it exactly like a back button would. (Main.storyboard names this
+/// class.)
+class MainViewController: CAPBridgeViewController {
+    override func capacitorDidLoad() {
+        super.capacitorDidLoad()
+        webView?.allowsBackForwardNavigationGestures = true
+    }
+}
