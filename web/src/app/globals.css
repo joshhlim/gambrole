@@ -120,6 +120,26 @@ body {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* Inside the iOS app only (html.native, set before paint by NATIVE_SCRIPT):
+   stop the web tells — the grey flash on tap, long-press callouts, text
+   that selects when you meant to press a button, and the 300ms wait for
+   a double-tap that will never zoom. Fields and anything opted in with
+   .selectable stay selectable. */
+html.native {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+html.native body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+html.native :is(input, textarea, [contenteditable="true"], .selectable) {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
 /* A solid strip behind the status bar, so pages scrolling up don't run
    under the clock. Zero height wherever there's no inset. */
 .status-bar-shield {

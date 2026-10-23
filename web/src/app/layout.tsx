@@ -3,10 +3,11 @@ import { Geist, Geist_Mono, Outfit } from "next/font/google";
 import "./globals.css";
 import RouteTransition from "@/components/RouteTransition";
 import Backdrop from "@/components/Backdrop";
+import NativeShell from "@/components/NativeShell";
 import TopBar from "@/components/TopBar";
 import PreferencesSync from "@/components/PreferencesSync";
 import Onboarding from "@/components/Onboarding";
-import { THEME_COLORS, THEME_SCRIPT } from "@/lib/themeScript";
+import { NATIVE_SCRIPT, THEME_COLORS, THEME_SCRIPT } from "@/lib/themeScript";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -58,6 +59,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        <script dangerouslySetInnerHTML={{ __html: NATIVE_SCRIPT }} />
       </head>
       <body className="min-h-full flex flex-col bg-background text-foreground">
         <Backdrop />
@@ -69,6 +71,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <RouteTransition>{children}</RouteTransition>
         <PreferencesSync />
         <Onboarding />
+        <NativeShell />
       </body>
     </html>
   );
