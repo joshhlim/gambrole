@@ -56,14 +56,23 @@ class DeletionUnavailable(Exception):
     """The server can't remove the sign-in, so it won't delete anything."""
 
 
+def _admin_headers(key: str) -> dict[str, str]:
+    """A secret key (sb_secret_…) goes on `apikey` alone — it isn't a JWT,
+    and Supabase rejects one sent as a Bearer token. A legacy service_role
+    key is a JWT, and the admin API wants it on both."""
+    headers = {"apikey": key}
+    if not key.startswith("sb_"):
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
+
+
 def _delete_supabase_user(user_id: UUID) -> None:
     """Supabase's admin API: removes the sign-in and revokes its sessions."""
     assert settings.supabase_url and settings.supabase_service_role_key
-    key = settings.supabase_service_role_key
     req = urllib.request.Request(
         f"{settings.supabase_url.rstrip('/')}/auth/v1/admin/users/{user_id}",
         method="DELETE",
-        headers={"apikey": key, "Authorization": f"Bearer {key}"},
+        headers=_admin_headers(settings.supabase_service_role_key),
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as res:

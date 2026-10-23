@@ -41,7 +41,8 @@ class Settings(BaseSettings):
     # Both may be set; JWKS is tried first when present.
     supabase_url: str | None = None
     supabase_jwt_secret: str | None = None
-    # Supabase project settings -> API -> "service_role" key. Only used to
+    # Supabase project settings -> API Keys -> a "secret" key (sb_secret_…),
+    # or the legacy "service_role" key on older projects. Only used to
     # delete a sign-in when someone deletes their account (account_service);
     # without it, account deletion is refused in supabase mode rather than
     # leaving a login behind that points at nothing. Server-side only.

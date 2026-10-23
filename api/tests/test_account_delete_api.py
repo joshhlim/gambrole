@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app import auth
+from app import account_service, auth
 from app.config import settings
 from app.main import app
 
@@ -121,3 +121,13 @@ async def test_supabase_mode_refuses_without_the_service_key(make_device, monkey
     finally:
         app.dependency_overrides.clear()
     assert r.status_code == 503 and "isn't set up" in r.json()["detail"]
+
+
+def test_admin_headers_suit_both_kinds_of_key():
+    # New secret keys aren't JWTs: apikey only, never a Bearer token.
+    assert account_service._admin_headers("sb_secret_abc") == {"apikey": "sb_secret_abc"}
+    # A legacy service_role key is a JWT, and goes on both.
+    assert account_service._admin_headers("eyJhbGciOi.x.y") == {
+        "apikey": "eyJhbGciOi.x.y",
+        "Authorization": "Bearer eyJhbGciOi.x.y",
+    }
