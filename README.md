@@ -305,3 +305,5 @@ See [web/README.md](web/README.md) and ADR-0004.
 | `src/lib/api.ts` | Typed fetch client; auto-retries a command once on 409 |
 | `src/lib/usePolling.ts` | Stands in for Supabase Realtime for now |
 | `e2e/full-game.spec.ts` | Three-device end-to-end proof |
+
+License: MIT
